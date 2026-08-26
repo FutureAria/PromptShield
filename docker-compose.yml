@@ -1,0 +1,42 @@
+services:
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - gateway
+
+  gateway:
+    image: nginx:alpine
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+  backend:
+    build: ./backend
+    environment:
+      - DATABASE_URL=postgresql://promptshield:promptshield@db:5432/promptshield
+    depends_on:
+      - db
+      - ollama
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=promptshield
+      - POSTGRES_PASSWORD=promptshield
+      - POSTGRES_DB=promptshield
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama
+
+volumes:
+  db_data:
+  ollama_data:

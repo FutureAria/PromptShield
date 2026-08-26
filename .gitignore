@@ -1,0 +1,22 @@
+# Node / React
+node_modules/
+frontend/dist/
+frontend/build/
+
+# Python / FastAPI
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Env / secrets
+.env
+.env.*
+*.pem
+
+# OS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
