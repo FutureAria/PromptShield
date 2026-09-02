@@ -1,6 +1,7 @@
 export * from './types'
 export {
   decideApproval,
+  getApprovalStatus,
   getAuditLogs,
   getDashboard,
   getPendingApprovals,
@@ -10,12 +11,6 @@ export {
   resetMockDelayRange,
   send,
   setMockDelayRange,
-} from './mock'
-export type {
-  ApprovalDecision,
-  ApprovalDecisionResult,
-  ApprovalRequestResult,
-  AuditLogFilter,
 } from './mock'
 
 // 실제 백엔드 연결 시 이 파일의 공개 API는 유지하고 위 mock export를

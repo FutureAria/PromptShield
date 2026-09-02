@@ -1,12 +1,15 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent } from 'react'
 import {
+  getApprovalStatus,
   inspect,
   reportFalsePositive,
   requestApproval,
   send,
 } from '../api'
 import type {
+  ApprovalState,
+  ApprovalStatus,
   ChatMessage,
   Detection,
   Grade,
@@ -15,6 +18,106 @@ import type {
 } from '../api/types'
 import { InspectionComparison } from '../components/InspectionComparison'
 import '../styles/employee.css'
+
+const PENDING_APPROVAL_STORAGE_KEY = 'promptshield.pendingApprovalRequestId'
+
+interface EmployeeMessage extends ChatMessage {
+  approvalState?: ApprovalState
+}
+
+interface ApprovalRoundTripContext {
+  requestId: string
+  inspection: InspectionResult
+}
+
+// SPA 안에서 관리자 화면을 왕복할 때만 쓰는 메모리 컨텍스트다.
+// 원문이나 검사 결과를 sessionStorage 등 영속 저장소에 기록하지 않는다.
+let approvalRoundTripContext: ApprovalRoundTripContext | null = null
+
+const approvalMessageLabels: Record<ApprovalState, string> = {
+  pending: '승인 요청함',
+  approved: '승인됨',
+  conditional: '조건부 승인됨',
+  rejected: '반려됨',
+}
+
+function readPendingApprovalRequestId(): string | null {
+  try {
+    return window.sessionStorage.getItem(PENDING_APPROVAL_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
+function storePendingApprovalRequestId(requestId: string): void {
+  try {
+    window.sessionStorage.setItem(PENDING_APPROVAL_STORAGE_KEY, requestId)
+  } catch {
+    // 저장소를 사용할 수 없어도 현재 화면에서는 승인 흐름을 계속 진행한다.
+  }
+}
+
+function clearPendingApprovalRequestId(requestId: string): void {
+  try {
+    if (window.sessionStorage.getItem(PENDING_APPROVAL_STORAGE_KEY) === requestId) {
+      window.sessionStorage.removeItem(PENDING_APPROVAL_STORAGE_KEY)
+    }
+  } catch {
+    // 저장소 접근 실패는 화면의 승인 처리 결과에 영향을 주지 않는다.
+  }
+}
+
+function createApprovalMessage(
+  inspection: InspectionResult,
+  approvalState: ApprovalState,
+): EmployeeMessage {
+  return {
+    id: `user-${inspection.requestId}`,
+    role: 'user',
+    text: inspection.originalText,
+    inspection,
+    approvalState,
+  }
+}
+
+function upsertApprovalMessage(
+  messages: EmployeeMessage[],
+  inspection: InspectionResult,
+  approvalState: ApprovalState,
+): EmployeeMessage[] {
+  const messageId = `user-${inspection.requestId}`
+  const exists = messages.some(({ id }) => id === messageId)
+
+  if (!exists) {
+    return [...messages, createApprovalMessage(inspection, approvalState)]
+  }
+
+  return messages.map((message) => (
+    message.id === messageId ? { ...message, approvalState } : message
+  ))
+}
+
+function updateApprovalMessage(
+  messages: EmployeeMessage[],
+  requestId: string,
+  approvalState: ApprovalState,
+): EmployeeMessage[] {
+  const messageId = `user-${requestId}`
+  return messages.map((message) => (
+    message.id === messageId ? { ...message, approvalState } : message
+  ))
+}
+
+function formatDateTime(value: string): string {
+  return new Intl.DateTimeFormat('ko-KR', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(new Date(value))
+}
 
 const gradeLabels: Record<Grade, string> = {
   normal: '일반',
@@ -30,8 +133,18 @@ const routeLabels: Record<Route, string> = {
   blocked: '전송 차단',
 }
 
-function decisionCopy(result: InspectionResult) {
+function decisionCopy(result: InspectionResult, approvalState?: ApprovalState) {
   const count = result.detections.length
+
+  // 승인이 난 뒤에도 "차단했다"를 그대로 두면 같은 카드가 상반된 두 말을 한다.
+  if (result.grade === 'blocked') {
+    if (approvalState === 'approved') {
+      return '관리자 승인으로 전송할 수 있다.'
+    }
+    if (approvalState === 'conditional') {
+      return '관리자 조건부 승인으로 마스킹본만 전송할 수 있다.'
+    }
+  }
 
   switch (result.grade) {
     case 'normal':
@@ -59,13 +172,16 @@ function RouteLabel({ route }: { route: Route }) {
 }
 
 export default function EmployeePage() {
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [messages, setMessages] = useState<EmployeeMessage[]>([])
   const [draft, setDraft] = useState('')
   const [inspection, setInspection] = useState<InspectionResult | null>(null)
   const [isInspecting, setIsInspecting] = useState(false)
   const [isSending, setIsSending] = useState(false)
   const [isRequestingApproval, setIsRequestingApproval] = useState(false)
-  const [approvalRequested, setApprovalRequested] = useState(false)
+  const [isRestoringApproval, setIsRestoringApproval] = useState(
+    () => readPendingApprovalRequestId() !== null,
+  )
+  const [approvalStatus, setApprovalStatus] = useState<ApprovalStatus | null>(null)
   const [reportedDetectionIds, setReportedDetectionIds] = useState<Set<string>>(
     () => new Set(),
   )
@@ -75,9 +191,115 @@ export default function EmployeePage() {
   const [error, setError] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
+  useEffect(() => {
+    const storedRequestId = readPendingApprovalRequestId()
+    if (!storedRequestId) {
+      setIsRestoringApproval(false)
+      return
+    }
+    const requestId = storedRequestId
+
+    let active = true
+    setIsRestoringApproval(true)
+
+    async function restoreApproval() {
+      try {
+        const status = await getApprovalStatus(requestId)
+        if (!active) return
+
+        if (!status) {
+          clearPendingApprovalRequestId(requestId)
+          if (approvalRoundTripContext?.requestId === requestId) {
+            approvalRoundTripContext = null
+          }
+          return
+        }
+
+        const context = approvalRoundTripContext
+        if (!context || context.requestId !== requestId) {
+          // ApprovalStatus에는 의도적으로 원문이 없으므로 검사 컨텍스트 없이
+          // 복원할 수 없다. 정상적인 새로고침에서는 목 상태도 함께 사라져 null이다.
+          clearPendingApprovalRequestId(requestId)
+          return
+        }
+
+        setInspection(context.inspection)
+        setDraft(context.inspection.originalText)
+        setApprovalStatus(status)
+        setMessages((current) => (
+          upsertApprovalMessage(current, context.inspection, status.state)
+        ))
+      } catch {
+        if (active) {
+          setError('승인 처리 결과를 불러오지 못했다. 잠시 후 다시 확인해 주세요.')
+        }
+      } finally {
+        if (active) setIsRestoringApproval(false)
+      }
+    }
+
+    void restoreApproval()
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (approvalStatus?.state !== 'pending') return
+
+    const requestId = approvalStatus.requestId
+    let active = true
+
+    async function pollApprovalStatus() {
+      try {
+        const status = await getApprovalStatus(requestId)
+        if (!active) return
+
+        if (!status) {
+          clearPendingApprovalRequestId(requestId)
+          if (approvalRoundTripContext?.requestId === requestId) {
+            approvalRoundTripContext = null
+          }
+          setApprovalStatus(null)
+          setInspection(null)
+          setDraft('')
+          setMessages((current) => (
+            current.filter(({ id }) => id !== `user-${requestId}`)
+          ))
+          return
+        }
+
+        setApprovalStatus(status)
+        setMessages((current) => (
+          updateApprovalMessage(current, requestId, status.state)
+        ))
+      } catch {
+        // 일시적인 폴링 실패는 다음 주기의 조회로 복구한다.
+      }
+    }
+
+    void pollApprovalStatus()
+    const timer = window.setInterval(() => {
+      void pollApprovalStatus()
+    }, 3000)
+
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [approvalStatus?.requestId, approvalStatus?.state])
+
+  const finishApprovalRoundTrip = (requestId: string) => {
+    clearPendingApprovalRequestId(requestId)
+    if (approvalRoundTripContext?.requestId === requestId) {
+      approvalRoundTripContext = null
+    }
+    setApprovalStatus(null)
+  }
+
   const resetInspectionState = () => {
+    if (approvalStatus) finishApprovalRoundTrip(approvalStatus.requestId)
     setInspection(null)
-    setApprovalRequested(false)
     setReportedDetectionIds(new Set<string>())
     setReportingDetectionIds(new Set<string>())
     setError(null)
@@ -85,7 +307,7 @@ export default function EmployeePage() {
 
   const handleInspect = async (event?: FormEvent) => {
     event?.preventDefault()
-    if (isInspecting || isSending) return
+    if (isInspecting || isSending || isRequestingApproval || isRestoringApproval) return
 
     if (!draft.trim()) {
       setError('검사할 내용을 입력해 주세요.')
@@ -95,7 +317,6 @@ export default function EmployeePage() {
 
     setIsInspecting(true)
     setInspection(null)
-    setApprovalRequested(false)
     setReportedDetectionIds(new Set<string>())
     setReportingDetectionIds(new Set<string>())
     setError(null)
@@ -129,21 +350,30 @@ export default function EmployeePage() {
   }
 
   const handleSend = async () => {
-    if (!inspection || inspection.grade === 'blocked' || isSending) return
+    if (!inspection || isSending) return
+    if (
+      inspection.grade === 'blocked'
+      && approvalStatus?.state !== 'approved'
+      && approvalStatus?.state !== 'conditional'
+    ) return
 
     setIsSending(true)
     setError(null)
 
     try {
       const assistantMessage = await send(inspection.requestId)
-      const userMessage: ChatMessage = {
+      const userMessage: EmployeeMessage = {
         id: `user-${inspection.requestId}`,
         role: 'user',
         text: inspection.originalText,
         inspection,
       }
 
-      setMessages((current) => [...current, userMessage, assistantMessage])
+      setMessages((current) => (
+        inspection.grade === 'blocked'
+          ? [...current, assistantMessage]
+          : [...current, userMessage, assistantMessage]
+      ))
       setDraft('')
       resetInspectionState()
     } catch {
@@ -160,7 +390,18 @@ export default function EmployeePage() {
     setError(null)
     try {
       await requestApproval(inspection.requestId)
-      setApprovalRequested(true)
+      const status = await getApprovalStatus(inspection.requestId)
+      if (!status) throw new Error('생성된 승인 요청의 상태를 찾을 수 없다.')
+
+      approvalRoundTripContext = {
+        requestId: inspection.requestId,
+        inspection,
+      }
+      storePendingApprovalRequestId(inspection.requestId)
+      setApprovalStatus(status)
+      setMessages((current) => (
+        upsertApprovalMessage(current, inspection, status.state)
+      ))
     } catch {
       setError('승인 요청을 보내지 못했다. 잠시 후 다시 시도해 주세요.')
     } finally {
@@ -189,6 +430,42 @@ export default function EmployeePage() {
 
   const renderActions = (result: InspectionResult) => {
     if (result.grade === 'blocked') {
+      if (approvalStatus?.state === 'pending') return null
+
+      if (approvalStatus?.state === 'approved') {
+        return (
+          <button
+            className="button button--primary"
+            disabled={isSending}
+            onClick={() => void handleSend()}
+            type="button"
+          >
+            {isSending ? '처리 중' : '원문 그대로 전송'}
+          </button>
+        )
+      }
+
+      if (approvalStatus?.state === 'conditional') {
+        return (
+          <button
+            className="button button--primary"
+            disabled={isSending}
+            onClick={() => void handleSend()}
+            type="button"
+          >
+            {isSending ? '처리 중' : '마스킹본 전송'}
+          </button>
+        )
+      }
+
+      if (approvalStatus?.state === 'rejected') {
+        return (
+          <button className="button button--primary" onClick={returnToEditing} type="button">
+            수정 후 재검사
+          </button>
+        )
+      }
+
       return (
         <>
           <button className="button button--disabled" disabled type="button">
@@ -199,15 +476,11 @@ export default function EmployeePage() {
           </button>
           <button
             className="button button--secondary"
-            disabled={isRequestingApproval || approvalRequested}
+            disabled={isRequestingApproval}
             onClick={() => void handleApprovalRequest()}
             type="button"
           >
-            {approvalRequested
-              ? '승인 요청 보냄'
-              : isRequestingApproval
-                ? '승인 요청 중'
-                : '관리자 승인 요청'}
+            {isRequestingApproval ? '승인 요청 중' : '관리자 승인 요청'}
           </button>
         </>
       )
@@ -237,6 +510,8 @@ export default function EmployeePage() {
       </>
     )
   }
+
+  const inspectionActions = inspection ? renderActions(inspection) : null
 
   return (
     <main className="employee-page" id="main-content">
@@ -271,6 +546,11 @@ export default function EmployeePage() {
                   {message.role === 'assistant' && message.route && (
                     <RouteLabel route={message.route} />
                   )}
+                  {message.role === 'user' && message.approvalState && (
+                    <span className="message__approval-state">
+                      {approvalMessageLabels[message.approvalState]}
+                    </span>
+                  )}
                 </div>
                 <p>{message.text}</p>
               </li>
@@ -289,7 +569,13 @@ export default function EmployeePage() {
             AI에게 보낼 내용
           </label>
           <textarea
-            disabled={isInspecting || isSending}
+            disabled={
+              isInspecting
+              || isSending
+              || isRequestingApproval
+              || isRestoringApproval
+              || approvalStatus !== null
+            }
             id="prompt-input"
             onChange={(event) => handleDraftChange(event.target.value)}
             onKeyDown={handleComposerKeyDown}
@@ -302,7 +588,14 @@ export default function EmployeePage() {
             <span className="composer__count mono">{draft.length}자</span>
             <button
               className="button button--primary composer__submit"
-              disabled={isInspecting || isSending || !draft.trim()}
+              disabled={
+                isInspecting
+                || isSending
+                || isRequestingApproval
+                || isRestoringApproval
+                || approvalStatus !== null
+                || !draft.trim()
+              }
               type="submit"
             >
               {isInspecting ? '검사 중' : '검사'}
@@ -342,10 +635,18 @@ export default function EmployeePage() {
               <p className="eyebrow">검사 결과</p>
               <h2 id="inspection-heading">
                 <GradeBadge grade={inspection.grade} />
-                <span>{decisionCopy(inspection)}</span>
+                <span>{decisionCopy(inspection, approvalStatus?.state)}</span>
               </h2>
             </div>
-            <RouteLabel route={inspection.route} />
+            <RouteLabel
+              route={
+                inspection.grade === 'blocked' && approvalStatus?.state === 'approved'
+                  ? 'external_llm'
+                  : inspection.grade === 'blocked' && approvalStatus?.state === 'conditional'
+                    ? 'masked_external'
+                    : inspection.route
+              }
+            />
           </div>
 
           <dl className="inspection-card__facts">
@@ -363,7 +664,9 @@ export default function EmployeePage() {
             </div>
           </dl>
 
-          {inspection.reason && (
+          {inspection.reason
+            && approvalStatus?.state !== 'approved'
+            && approvalStatus?.state !== 'conditional' && (
             <p className="inspection-card__reason">
               <strong>차단 사유</strong>
               {inspection.reason}
@@ -379,18 +682,77 @@ export default function EmployeePage() {
 
           {isSending && (
             <p className="inspection-card__progress" role="status">
-              {inspection.grade === 'confidential'
+              {inspection.grade === 'blocked' && approvalStatus?.state === 'approved'
+                ? '승인된 원문을 보내고 있다.'
+                : inspection.grade === 'blocked' && approvalStatus?.state === 'conditional'
+                  ? '승인된 마스킹본을 보내고 있다.'
+                  : inspection.grade === 'confidential'
                 ? '외부로 전송하지 않고 사내에서 처리 중'
                 : '안전한 전송본을 보내고 있다.'}
             </p>
           )}
-          {approvalRequested && (
-            <p className="inspection-card__progress" role="status">
-              관리자에게 승인 요청을 보냈다. 처리 결과는 이 화면에서 확인할 수 있다.
-            </p>
+          {approvalStatus && (
+            <div
+              className={`approval-status approval-status--${approvalStatus.state}`}
+              role="status"
+            >
+              <strong>
+                {approvalStatus.state === 'pending'
+                  ? '관리자 승인을 기다리는 중'
+                  : approvalStatus.state === 'approved'
+                    ? '관리자가 승인했다'
+                    : approvalStatus.state === 'conditional'
+                      ? '관리자가 마스킹본 전송을 조건으로 승인했다'
+                      : '관리자가 반려했다'}
+              </strong>
+
+              {approvalStatus.state === 'pending' ? (
+                <>
+                  <p>승인 요청을 보냈다. 처리 결과가 정해지면 이 화면에 바로 표시한다.</p>
+                  <dl className="approval-status__facts">
+                    <div>
+                      <dt>요청 시각</dt>
+                      <dd>
+                        <time dateTime={approvalStatus.requestedAt}>
+                          {formatDateTime(approvalStatus.requestedAt)}
+                        </time>
+                      </dd>
+                    </div>
+                  </dl>
+                </>
+              ) : (
+                <dl className="approval-status__facts">
+                  {approvalStatus.decidedBy && (
+                    <div>
+                      <dt>결정자</dt>
+                      <dd>{approvalStatus.decidedBy}</dd>
+                    </div>
+                  )}
+                  {approvalStatus.decidedAt && (
+                    <div>
+                      <dt>결정 시각</dt>
+                      <dd>
+                        <time dateTime={approvalStatus.decidedAt}>
+                          {formatDateTime(approvalStatus.decidedAt)}
+                        </time>
+                      </dd>
+                    </div>
+                  )}
+                </dl>
+              )}
+
+              {approvalStatus.state === 'rejected' && approvalStatus.rejectionReason && (
+                <div className="approval-status__rejection">
+                  <span>반려 사유</span>
+                  <p>{approvalStatus.rejectionReason}</p>
+                </div>
+              )}
+            </div>
           )}
 
-          <div className="inspection-card__actions">{renderActions(inspection)}</div>
+          {inspectionActions && (
+            <div className="inspection-card__actions">{inspectionActions}</div>
+          )}
         </section>
       )}
     </main>

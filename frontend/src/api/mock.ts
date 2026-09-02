@@ -1,4 +1,10 @@
 import type {
+  ApprovalDecision,
+  ApprovalDecisionResult,
+  ApprovalRequestResult,
+  ApprovalState,
+  ApprovalStatus,
+  AuditLogFilter,
   AuditLogEntry,
   ChatMessage,
   DashboardSummary,
@@ -9,26 +15,6 @@ import type {
   PendingApproval,
   Route,
 } from './types'
-
-export interface AuditLogFilter {
-  grade?: Grade | 'all'
-  from?: string
-  to?: string
-  search?: string
-}
-
-export type ApprovalDecision = 'approved' | 'conditional' | 'rejected'
-
-export interface ApprovalDecisionResult {
-  id: string
-  decision: ApprovalDecision
-  status: 'decided'
-}
-
-export interface ApprovalRequestResult {
-  approvalId: string
-  status: 'pending'
-}
 
 interface DelayRange {
   min: number
@@ -48,13 +34,15 @@ interface DetectionCandidate {
 
 const DEFAULT_DELAY: DelayRange = { min: 200, max: 700 }
 const DEFAULT_INTERNAL_DELAY: DelayRange = { min: 1100, max: 1300 }
+const DEFAULT_APPROVAL_STATUS_DELAY: DelayRange = { min: 60, max: 120 }
 
 let standardDelay: DelayRange = { ...DEFAULT_DELAY }
 let internalDelay: DelayRange = { ...DEFAULT_INTERNAL_DELAY }
+let approvalStatusDelay: DelayRange = { ...DEFAULT_APPROVAL_STATUS_DELAY }
 let sequence = 0
 
 const inspections = new Map<string, InspectionResult>()
-const approvalForRequest = new Map<string, string>()
+const approvalStatuses = new Map<string, ApprovalStatus>()
 const falsePositiveReportKeys = new Set<string>()
 
 const routeByGrade: Record<Grade, Route> = {
@@ -69,6 +57,12 @@ const gradeWeight: Record<Grade, number> = {
   caution: 1,
   confidential: 2,
   blocked: 3,
+}
+
+const stateByDecision: Record<ApprovalDecision, Exclude<ApprovalState, 'pending'>> = {
+  approved: 'approved',
+  conditional: 'conditional',
+  rejected: 'rejected',
 }
 
 function createId(prefix: string): string {
@@ -89,16 +83,22 @@ export function setMockDelayRange(min: number, max: number): void {
 
   if (min === 0 && max === 0) {
     internalDelay = { min: 0, max: 0 }
+    approvalStatusDelay = { min: 0, max: 0 }
     return
   }
 
   // 사용자 지정 지연에서도 사내 LLM은 일반 요청보다 약 두 배 오래 걸리게 유지한다.
   internalDelay = { min: min * 2, max: max * 2 }
+  approvalStatusDelay = {
+    min: Math.floor(min / 4),
+    max: Math.floor(max / 4),
+  }
 }
 
 export function resetMockDelayRange(): void {
   standardDelay = { ...DEFAULT_DELAY }
   internalDelay = { ...DEFAULT_INTERNAL_DELAY }
+  approvalStatusDelay = { ...DEFAULT_APPROVAL_STATUS_DELAY }
 }
 
 async function waitForMock(range: DelayRange): Promise<number> {
@@ -344,19 +344,47 @@ export async function send(requestId: string): Promise<ChatMessage> {
   if (!inspection) {
     throw new Error('검사 결과를 찾을 수 없다. 내용을 다시 검사해 달라.')
   }
+
+  let route = inspection.route
+  let responseText = responseForGrade(inspection.grade)
+
   if (inspection.grade === 'blocked') {
-    throw new Error('위험 등급 요청은 승인 전에는 전송할 수 없다.')
+    const approvalStatus = approvalStatuses.get(requestId)
+    if (!approvalStatus || approvalStatus.state === 'pending') {
+      throw new Error('관리자 승인 전에는 전송할 수 없다.')
+    }
+    if (approvalStatus.state === 'rejected') {
+      throw new Error('관리자가 반려한 요청이다.')
+    }
+    if (approvalStatus.consumedAt) {
+      throw new Error('이미 전송에 사용한 승인이다. 내용을 다시 검사해 승인을 요청해 달라.')
+    }
+
+    // 승인은 1회용이므로 전송을 기다리기 전에 소모 처리한다.
+    // 지연 뒤에 기록하면 연속 호출이 둘 다 검사를 통과해 중복 전송된다.
+    approvalStatuses.set(requestId, {
+      ...approvalStatus,
+      consumedAt: new Date().toISOString(),
+    })
+
+    if (approvalStatus.state === 'approved') {
+      route = 'external_llm'
+      responseText = '관리자 승인에 따라 원문을 외부 LLM으로 전송해 처리했다.'
+    } else {
+      route = 'masked_external'
+      responseText = '관리자의 조건부 승인에 따라 민감정보를 마스킹한 전송본으로 처리했다. 원문 값은 외부 LLM에 전달하지 않았다.'
+    }
   }
 
   await waitForMock(
-    inspection.route === 'internal_llm' ? internalDelay : standardDelay,
+    route === 'internal_llm' ? internalDelay : standardDelay,
   )
 
   return {
     id: createId('message'),
     role: 'assistant',
-    text: responseForGrade(inspection.grade),
-    route: inspection.route,
+    text: responseText,
+    route,
   }
 }
 
@@ -379,14 +407,19 @@ export async function requestApproval(requestId: string): Promise<ApprovalReques
     throw new Error('관리자 승인은 위험 등급 요청에서만 요청할 수 있다.')
   }
 
-  const existingApprovalId = approvalForRequest.get(requestId)
-  if (existingApprovalId) {
-    return { approvalId: existingApprovalId, status: 'pending' }
+  const existingStatus = approvalStatuses.get(requestId)
+  if (existingStatus?.state === 'pending') {
+    return { approvalId: existingStatus.approvalId, status: 'pending' }
+  }
+  if (existingStatus) {
+    throw new Error('이미 처리된 승인 요청이다. 내용을 수정한 후 다시 검사해 달라.')
   }
 
+  const requestedAt = new Date().toISOString()
   const approval: PendingApproval = {
     id: createId('approval'),
-    at: new Date().toISOString(),
+    requestId,
+    at: requestedAt,
     userName: '홍길동',
     department: '영업팀',
     reason: inspection.reason || '정책상 관리자 확인이 필요한 요청이다.',
@@ -394,9 +427,20 @@ export async function requestApproval(requestId: string): Promise<ApprovalReques
     maskedPreview: inspection.maskedText,
   }
   pendingApprovals.unshift(approval)
-  approvalForRequest.set(requestId, approval.id)
+  approvalStatuses.set(requestId, {
+    approvalId: approval.id,
+    requestId,
+    state: 'pending',
+    requestedAt,
+  })
 
   return { approvalId: approval.id, status: 'pending' }
+}
+
+export async function getApprovalStatus(requestId: string): Promise<ApprovalStatus | null> {
+  await waitForMock(approvalStatusDelay)
+  const status = approvalStatuses.get(requestId)
+  return status ? { ...status } : null
 }
 
 export async function reportFalsePositive(
@@ -483,6 +527,7 @@ const auditLogs = makeAuditLogs()
 const initialPendingApprovals: readonly PendingApproval[] = [
   {
     id: 'approval-001',
+    requestId: 'req-approval-sample-001',
     at: isoDaysAgo(0, 8),
     userName: '김철수',
     department: '생산관리팀',
@@ -492,6 +537,7 @@ const initialPendingApprovals: readonly PendingApproval[] = [
   },
   {
     id: 'approval-002',
+    requestId: 'req-approval-sample-002',
     at: isoDaysAgo(0, 7),
     userName: '이영희',
     department: '개발팀',
@@ -501,6 +547,7 @@ const initialPendingApprovals: readonly PendingApproval[] = [
   },
   {
     id: 'approval-003',
+    requestId: 'req-approval-sample-003',
     at: isoDaysAgo(1, 15),
     userName: '홍길동',
     department: '영업팀',
@@ -510,6 +557,7 @@ const initialPendingApprovals: readonly PendingApproval[] = [
   },
   {
     id: 'approval-004',
+    requestId: 'req-approval-sample-004',
     at: isoDaysAgo(2, 11),
     userName: '김철수',
     department: '경영지원팀',
@@ -523,6 +571,15 @@ let pendingApprovals: PendingApproval[] = initialPendingApprovals.map((approval)
   ...approval,
   detectionSummary: approval.detectionSummary.map((item) => ({ ...item })),
 }))
+
+for (const approval of pendingApprovals) {
+  approvalStatuses.set(approval.requestId, {
+    approvalId: approval.id,
+    requestId: approval.requestId,
+    state: 'pending',
+    requestedAt: approval.at,
+  })
+}
 
 function utcDateKey(daysAgo: number): string {
   const date = new Date()
@@ -658,9 +715,22 @@ export async function decideApproval(
   }
 
   pendingApprovals.splice(index, 1)
+  const decidedAt = new Date().toISOString()
+  const decidedBy = '보안 관리자'
+  const currentStatus = approvalStatuses.get(approval.requestId)
+  approvalStatuses.set(approval.requestId, {
+    approvalId: approval.id,
+    requestId: approval.requestId,
+    state: stateByDecision[decision],
+    requestedAt: currentStatus?.requestedAt ?? approval.at,
+    decidedAt,
+    decidedBy,
+    ...(decision === 'rejected' ? { rejectionReason: reason } : {}),
+  })
+
   const auditEntry: AuditLogEntry = {
     id: createId('REQ'),
-    at: new Date().toISOString(),
+    at: decidedAt,
     userName: approval.userName,
     department: approval.department,
     grade: 'blocked',
@@ -672,7 +742,7 @@ export async function decideApproval(
     detectionCounts: approval.detectionSummary.map((item) => ({ ...item })),
   }
   if (decision !== 'rejected') {
-    auditEntry.approvedBy = '보안 관리자'
+    auditEntry.approvedBy = decidedBy
   }
   auditLogs.unshift(auditEntry)
 

@@ -1,8 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { decideApproval, getPendingApprovals } from '../api'
-import type { PendingApproval } from '../api/types'
-
-type ApprovalDecision = 'approved' | 'conditional' | 'rejected'
+import type { ApprovalDecision, PendingApproval } from '../api/types'
 
 const decisionMessages: Record<ApprovalDecision, string> = {
   approved: '요청을 승인했다.',
@@ -154,6 +152,7 @@ export default function ApprovalsPage() {
                   <div>
                     <h2 id={`approval-${item.id}`}>{item.userName}</h2>
                     <span>{item.department}</span>
+                    <span className="mono-fact">요청 {item.requestId}</span>
                   </div>
                   <time dateTime={item.at}>{formatDateTime(item.at)}</time>
                 </header>

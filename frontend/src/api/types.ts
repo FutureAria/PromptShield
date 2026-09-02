@@ -46,8 +46,45 @@ export interface AuditLogEntry {
 // ★ AuditLogEntry 에 원문·탐지 값 필드를 추가하지 마라.
 //   감사 로그 화면이 새 유출 경로가 되면 안 된다는 것이 이 프로젝트의 설계 원칙이다.
 
+export interface AuditLogFilter {
+  grade?: Grade | 'all'
+  from?: string
+  to?: string
+  search?: string
+}
+
+export type ApprovalDecision = 'approved' | 'conditional' | 'rejected'
+export type ApprovalState = 'pending' | 'approved' | 'conditional' | 'rejected'
+
+export interface ApprovalRequestResult {
+  approvalId: string
+  status: 'pending'
+}
+
+export interface ApprovalDecisionResult {
+  id: string
+  decision: ApprovalDecision
+  status: 'decided'
+}
+
+export interface ApprovalStatus {
+  approvalId: string
+  requestId: string
+  state: ApprovalState
+  requestedAt: string          // ISO 8601
+  decidedAt?: string           // 결정된 경우만
+  decidedBy?: string           // 결정한 관리자 이름
+  rejectionReason?: string     // state === 'rejected' 일 때만
+  consumedAt?: string          // 이 승인으로 전송이 이뤄진 시각
+}
+// ★ 승인은 1회용 허가다. 한 번 전송에 쓰인 승인(consumedAt 이 있는 승인)으로는
+//   같은 요청을 다시 전송할 수 없다. 백엔드도 같은 규칙을 지켜야 한다.
+// ★ ApprovalStatus 에 원문·탐지 값을 추가하지 마라.
+//   승인 상태 조회가 새 유출 경로가 되지 않도록 식별자와 처리 결과만 전달한다.
+
 export interface PendingApproval {
   id: string
+  requestId: string
   at: string
   userName: string
   department: string
