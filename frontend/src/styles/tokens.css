@@ -1,0 +1,22 @@
+:root {
+  /* 무채색 — UI의 전부 */
+  --paper: #FFFFFF;
+  --surface: #F6F7F9;
+  --surface-2: #EDEFF3;
+  --border: #DFE3E9;
+  --border-strong: #C4CAD3;
+  --ink: #10161D;
+  --ink-2: #3D4753;
+  --muted: #6B7684;
+
+  /* 판단에만 쓰는 색 */
+  --caution-fg: #8A5A00;      --caution-bg: #FFF4D6;      --caution-line: #E3B341;
+  --confidential-fg: #14509E; --confidential-bg: #E3EEFB; --confidential-line: #4A8BD6;
+  --blocked-fg: #A32020;      --blocked-bg: #FCE8E8;      --blocked-line: #D45B5B;
+  /* 일반(normal)은 색이 없다. --muted 와 --surface 를 쓴다. */
+
+  --radius: 6px;
+  --radius-sm: 4px;
+  --font-ui: 'Pretendard Variable', Pretendard, -apple-system, system-ui, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+}
