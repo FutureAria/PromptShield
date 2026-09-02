@@ -75,6 +75,7 @@ describe('목 상태 sessionStorage 영속화', () => {
     expect(Object.keys(JSON.parse(stored!))).toEqual(expect.arrayContaining([
       'inspections',
       'inspectionOwners',
+      'activeInspectionRequestIds',
       'approvalStatuses',
       'pendingApprovals',
       'auditLogs',
@@ -82,17 +83,27 @@ describe('목 상태 sessionStorage 영속화', () => {
       'accounts',
       'roleChanges',
     ]))
+    expect(Array.from({ length: sessionStorage.length }, (_, index) => (
+      sessionStorage.key(index)
+    )).sort()).toEqual([MOCK_STATE_KEY, 'promptshield.session'])
 
     const restored = await loadFreshApi()
     restored.setMockDelayRange(0, 0)
 
+    expect(await restored.getActiveInspection()).toMatchObject({
+      requestId: pendingInspection.requestId,
+    })
     expect(await restored.getInspection(approvedInspection.requestId)).toMatchObject({
       requestId: approvedInspection.requestId,
       originalText: approvedInspection.originalText,
     })
     await restored.login('aud-lee')
+    expect(await restored.getActiveInspection()).toBeNull()
     expect(await restored.getInspection(approvedInspection.requestId)).toBeNull()
     await restored.login('sec-park')
+    expect(await restored.getActiveInspection()).toMatchObject({
+      requestId: pendingInspection.requestId,
+    })
     expect(await restored.getApprovalStatus(approvedInspection.requestId)).toMatchObject({
       state: 'approved',
     })
@@ -122,6 +133,12 @@ describe('목 상태 sessionStorage 영속화', () => {
       to: 'employee',
     }))
     expect((await restored.getDashboard()).falsePositiveReports).toBe(8)
+
+    await restored.decideApproval(pendingRequest.approvalId, 'conditional')
+    await expect(restored.send(pendingInspection.requestId)).resolves.toMatchObject({
+      route: 'masked_external',
+    })
+    expect(await restored.getActiveInspection()).toBeNull()
   })
 
   it('2MB를 넘기기 전에 오래된 검사 결과부터 저장 스냅숏에서 덜어낸다', async () => {
@@ -140,10 +157,43 @@ describe('목 상태 sessionStorage 영속화', () => {
     const parsed = JSON.parse(stored!) as {
       inspections: [string, unknown][]
       inspectionOwners: [string, string | null][]
+      activeInspectionRequestIds: [string | null, string][]
     }
     expect(parsed.inspections.map(([requestId]) => requestId)).toEqual([second.requestId])
     expect(parsed.inspections.map(([requestId]) => requestId)).not.toContain(first.requestId)
     expect(parsed.inspectionOwners.map(([requestId]) => requestId)).toEqual([second.requestId])
+    expect(parsed.activeInspectionRequestIds).toEqual([[null, second.requestId]])
+  })
+
+  it('활성 검사는 익명·로그인 소유자를 엄격히 나누고 명시적으로 폐기한다', async () => {
+    const api = await loadFreshApi()
+    api.setMockDelayRange(0, 0)
+
+    const anonymousInspection = await api.inspect('홍길동 연락 문구')
+    const firstRead = await api.getActiveInspection()
+    expect(firstRead).toMatchObject({ requestId: anonymousInspection.requestId })
+    firstRead!.detections[0]!.label = '바뀐 복사본'
+    expect((await api.getActiveInspection())?.detections[0]?.label).toBe('이름')
+
+    await api.login('sec-park')
+    expect(await api.getActiveInspection()).toBeNull()
+    expect(await api.getInspection(anonymousInspection.requestId)).toBeNull()
+    api.clearActiveInspection(anonymousInspection.requestId)
+
+    await api.logout()
+    expect(await api.getActiveInspection()).toMatchObject({
+      requestId: anonymousInspection.requestId,
+    })
+    api.clearActiveInspection(anonymousInspection.requestId)
+    expect(await api.getActiveInspection()).toBeNull()
+
+    const stored = JSON.parse(sessionStorage.getItem(MOCK_STATE_KEY)!) as {
+      activeInspectionRequestIds: [string | null, string][]
+    }
+    expect(stored.activeInspectionRequestIds).toEqual([])
+    expect(Array.from({ length: sessionStorage.length }, (_, index) => (
+      sessionStorage.key(index)
+    ))).toEqual([MOCK_STATE_KEY])
   })
 
   it('손상된 스냅숏은 부분 복원하지 않고 씨앗 상태로 폴백한다', async () => {
@@ -176,6 +226,9 @@ describe('목 상태 sessionStorage 영속화', () => {
 
     const api = await loadFreshApi()
     api.setMockDelayRange(0, 0)
+    await expect(api.resetDemoState()).rejects.toThrow(
+      '시연 데이터를 초기화할 권한이 없다.',
+    )
     await api.login('aud-lee')
     await expect(api.resetDemoState()).rejects.toThrow(
       '시연 데이터를 초기화할 권한이 없다.',

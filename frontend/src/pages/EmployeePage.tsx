@@ -5,10 +5,11 @@ import {
   ATTACHMENT_MAX_BYTES,
   ATTACHMENT_MAX_COUNT,
   ATTACHMENT_MAX_TOTAL_BYTES,
+  clearActiveInspection,
   composeInspectionInput,
   formatBytes,
+  getActiveInspection,
   getApprovalStatus,
-  getInspection,
   getStoredSession,
   inspect,
   readAttachment,
@@ -28,8 +29,6 @@ import type {
 } from '../api/types'
 import { InspectionComparison } from '../components/InspectionComparison'
 import '../styles/employee.css'
-
-const PENDING_APPROVAL_STORAGE_KEY = 'promptshield.pendingApprovalRequestId'
 
 interface AttachmentChip {
   id: string
@@ -63,32 +62,6 @@ const approvalMessageLabels: Record<ApprovalState, string> = {
   approved: '승인됨',
   conditional: '조건부 승인됨',
   rejected: '반려됨',
-}
-
-function readPendingApprovalRequestId(): string | null {
-  try {
-    return window.sessionStorage.getItem(PENDING_APPROVAL_STORAGE_KEY)
-  } catch {
-    return null
-  }
-}
-
-function storePendingApprovalRequestId(requestId: string): void {
-  try {
-    window.sessionStorage.setItem(PENDING_APPROVAL_STORAGE_KEY, requestId)
-  } catch {
-    // 저장소를 사용할 수 없어도 현재 화면에서는 승인 흐름을 계속 진행한다.
-  }
-}
-
-function clearPendingApprovalRequestId(requestId: string): void {
-  try {
-    if (window.sessionStorage.getItem(PENDING_APPROVAL_STORAGE_KEY) === requestId) {
-      window.sessionStorage.removeItem(PENDING_APPROVAL_STORAGE_KEY)
-    }
-  } catch {
-    // 저장소 접근 실패는 화면의 승인 처리 결과에 영향을 주지 않는다.
-  }
 }
 
 function createApprovalMessage(
@@ -318,9 +291,7 @@ export default function EmployeePage() {
   const [isInspecting, setIsInspecting] = useState(false)
   const [isSending, setIsSending] = useState(false)
   const [isRequestingApproval, setIsRequestingApproval] = useState(false)
-  const [isRestoringApproval, setIsRestoringApproval] = useState(
-    () => readPendingApprovalRequestId() !== null,
-  )
+  const [isRestoringApproval, setIsRestoringApproval] = useState(true)
   const [approvalStatus, setApprovalStatus] = useState<ApprovalStatus | null>(null)
   const [reportedDetectionIds, setReportedDetectionIds] = useState<Set<string>>(
     () => new Set(),
@@ -344,38 +315,32 @@ export default function EmployeePage() {
   const unreadableCount = attachments.filter(({ verdict }) => verdict === 'unreadable').length
 
   useEffect(() => {
-    const storedRequestId = readPendingApprovalRequestId()
-    if (!storedRequestId) {
-      setIsRestoringApproval(false)
-      return
-    }
-    const requestId = storedRequestId
-
     let active = true
     setIsRestoringApproval(true)
 
-    async function restoreApproval() {
+    async function restoreInspection() {
       try {
-        const [status, storedInspection] = await Promise.all([
-          getApprovalStatus(requestId),
-          getInspection(requestId),
-        ])
+        const storedInspection = await getActiveInspection()
+        if (!active || !storedInspection) return
+
+        const status = await getApprovalStatus(storedInspection.requestId)
         if (!active) return
 
         if (!status) {
-          clearPendingApprovalRequestId(requestId)
-          if (approvalRoundTripContext?.requestId === requestId) {
-            approvalRoundTripContext = null
-          }
+          // 일반·주의·기밀과 아직 승인 요청 전인 위험 검사도 F5 뒤 카드를 복원한다.
+          setInspection(storedInspection)
+          setDraft(storedInspection.originalText)
+          attachmentsRef.current = []
+          setAttachments([])
           return
         }
 
         let context = approvalRoundTripContext
-        if ((!context || context.requestId !== requestId) && storedInspection) {
+        if (!context || context.requestId !== storedInspection.requestId) {
           // 전체 새로고침에서는 파일 객체와 이름을 복원하지 않는다. 검사를 만들었던
           // 사용자에게만 API가 돌려준 원문·결과로 승인 왕복의 핵심 흐름을 이어 간다.
           context = {
-            requestId,
+            requestId: storedInspection.requestId,
             inspection: storedInspection,
             draft: storedInspection.originalText,
             attachments: [],
@@ -384,11 +349,6 @@ export default function EmployeePage() {
           approvalRoundTripContext = context
         }
 
-        if (!context || context.requestId !== requestId) {
-          // 저장소가 막혔거나 2MB 제한으로 이 검사가 제거됐다면 안전하게 초기화한다.
-          clearPendingApprovalRequestId(requestId)
-          return
-        }
         if (context.userId !== (getStoredSession()?.userId ?? null)) {
           // 같은 탭에서 계정을 전환해도 다른 직원의 입력 원문을 복원하지 않는다.
           return
@@ -410,14 +370,14 @@ export default function EmployeePage() {
         ))
       } catch {
         if (active) {
-          setError('승인 처리 결과를 불러오지 못했다. 잠시 후 다시 확인해 주세요.')
+          setError('저장된 검사 결과를 불러오지 못했다. 잠시 후 다시 확인해 주세요.')
         }
       } finally {
         if (active) setIsRestoringApproval(false)
       }
     }
 
-    void restoreApproval()
+    void restoreInspection()
     return () => {
       active = false
     }
@@ -435,7 +395,7 @@ export default function EmployeePage() {
         if (!active) return
 
         if (!status) {
-          clearPendingApprovalRequestId(requestId)
+          clearActiveInspection(requestId)
           if (approvalRoundTripContext?.requestId === requestId) {
             approvalRoundTripContext = null
           }
@@ -472,7 +432,6 @@ export default function EmployeePage() {
   }, [approvalStatus?.requestId, approvalStatus?.state])
 
   const finishApprovalRoundTrip = (requestId: string) => {
-    clearPendingApprovalRequestId(requestId)
     if (approvalRoundTripContext?.requestId === requestId) {
       approvalRoundTripContext = null
     }
@@ -481,6 +440,7 @@ export default function EmployeePage() {
 
   const resetInspectionState = () => {
     if (approvalStatus) finishApprovalRoundTrip(approvalStatus.requestId)
+    if (inspection) clearActiveInspection(inspection.requestId)
     setInspection(null)
     setReportedDetectionIds(new Set<string>())
     setReportingDetectionIds(new Set<string>())
@@ -722,7 +682,6 @@ export default function EmployeePage() {
         attachments: [...attachments],
         userId: requestingUserId,
       }
-      storePendingApprovalRequestId(inspection.requestId)
       setApprovalStatus(status)
       setMessages((current) => (
         upsertApprovalMessage(current, inspection, status.state, draft, attachments)
