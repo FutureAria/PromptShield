@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent } from 'react'
 import {
   getApprovalStatus,
+  getStoredSession,
   inspect,
   reportFalsePositive,
   requestApproval,
@@ -28,6 +29,7 @@ interface EmployeeMessage extends ChatMessage {
 interface ApprovalRoundTripContext {
   requestId: string
   inspection: InspectionResult
+  userId: string | null
 }
 
 // SPA 안에서 관리자 화면을 왕복할 때만 쓰는 메모리 컨텍스트다.
@@ -222,6 +224,10 @@ export default function EmployeePage() {
           clearPendingApprovalRequestId(requestId)
           return
         }
+        if (context.userId !== (getStoredSession()?.userId ?? null)) {
+          // 같은 탭에서 계정을 전환해도 다른 직원의 입력 원문을 복원하지 않는다.
+          return
+        }
 
         setInspection(context.inspection)
         setDraft(context.inspection.originalText)
@@ -386,6 +392,7 @@ export default function EmployeePage() {
   const handleApprovalRequest = async () => {
     if (!inspection || inspection.grade !== 'blocked' || isRequestingApproval) return
 
+    const requestingUserId = getStoredSession()?.userId ?? null
     setIsRequestingApproval(true)
     setError(null)
     try {
@@ -396,6 +403,7 @@ export default function EmployeePage() {
       approvalRoundTripContext = {
         requestId: inspection.requestId,
         inspection,
+        userId: requestingUserId,
       }
       storePendingApprovalRequestId(inspection.requestId)
       setApprovalStatus(status)

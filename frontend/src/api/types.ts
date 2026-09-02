@@ -4,6 +4,22 @@ export type DetectionType =
   | 'rrn' | 'phone' | 'email' | 'account'
   | 'partner' | 'price' | 'source_code' | 'api_key'
 
+export type UserRole = 'employee' | 'approver' | 'auditor'
+
+export interface Session {
+  userId: string
+  name: string
+  department: string
+  role: UserRole
+}
+
+export interface DemoAccount extends Session {
+  description: string // 로그인 화면에 표시할 역할 설명 한 줄
+}
+
+// 실제 백엔드 연동 시 세션은 서버가 발급하며, 프런트의 역할 검사는 편의이지 보안 경계가 아니다.
+// 권한 판정의 최종 책임은 서버에 있다.
+
 export interface Detection {
   id: string
   type: DetectionType
@@ -27,7 +43,7 @@ export interface InspectionResult {
 
 export interface ChatMessage {
   id: string
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' // 대화 발화자 역할이며 계정 권한인 UserRole과는 별개다.
   text: string
   route?: Route          // assistant 메시지가 어느 경로로 처리됐는지
   inspection?: InspectionResult  // user 메시지에 붙은 검사 결과

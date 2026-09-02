@@ -1,8 +1,25 @@
-import { NavLink, useLocation } from 'react-router-dom'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
+import type { UserRole } from '../api/types'
+import { useSession } from '../auth/SessionContext'
+
+const roleLabels: Record<UserRole, string> = {
+  employee: '직원',
+  approver: '승인자',
+  auditor: '감사자',
+}
 
 export function SiteHeader() {
   const { pathname } = useLocation()
+  const navigate = useNavigate()
+  const { session, signOut, isLoading } = useSession()
   const isAdmin = pathname.startsWith('/admin')
+  const isLogin = pathname === '/login'
+  const canAccessAdmin = session?.role === 'approver' || session?.role === 'auditor'
+
+  async function handleSignOut() {
+    await signOut()
+    navigate('/login', { replace: true })
+  }
 
   return (
     <header className="site-header">
@@ -18,14 +35,35 @@ export function SiteHeader() {
           <span className="brand__descriptor">AI 입력 보안 게이트웨이</span>
         </NavLink>
 
-        <nav className="mode-switch" aria-label="사용자 화면 전환">
-          <NavLink to="/" end aria-current={!isAdmin ? 'page' : undefined}>
-            직원
-          </NavLink>
-          <NavLink to="/admin" aria-current={isAdmin ? 'page' : undefined}>
-            관리자
-          </NavLink>
-        </nav>
+        {!isLogin && session && (
+          <div className="site-header__actions">
+            <nav className="mode-switch" aria-label="화면 전환">
+              <NavLink to="/" end aria-current={!isAdmin ? 'page' : undefined}>
+                직원
+              </NavLink>
+              {canAccessAdmin && (
+                <NavLink to="/admin" aria-current={isAdmin ? 'page' : undefined}>
+                  관리자
+                </NavLink>
+              )}
+            </nav>
+
+            <div className="session-summary" aria-label="로그인 사용자">
+              <strong>{session.name}</strong>
+              <span className="session-summary__department">{session.department}</span>
+              <span className="role-badge">{roleLabels[session.role]}</span>
+            </div>
+
+            <button
+              className="session-logout"
+              disabled={isLoading}
+              type="button"
+              onClick={() => void handleSignOut()}
+            >
+              로그아웃
+            </button>
+          </div>
+        )}
       </div>
     </header>
   )

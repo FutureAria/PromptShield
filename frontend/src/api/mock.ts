@@ -8,12 +8,14 @@ import type {
   AuditLogEntry,
   ChatMessage,
   DashboardSummary,
+  DemoAccount,
   Detection,
   DetectionType,
   Grade,
   InspectionResult,
   PendingApproval,
   Route,
+  Session,
 } from './types'
 
 interface DelayRange {
@@ -35,6 +37,38 @@ interface DetectionCandidate {
 const DEFAULT_DELAY: DelayRange = { min: 200, max: 700 }
 const DEFAULT_INTERNAL_DELAY: DelayRange = { min: 1100, max: 1300 }
 const DEFAULT_APPROVAL_STATUS_DELAY: DelayRange = { min: 60, max: 120 }
+const SESSION_STORAGE_KEY = 'promptshield.session'
+
+const demoAccounts: readonly DemoAccount[] = [
+  {
+    userId: 'emp-hong',
+    name: '홍길동',
+    department: '영업팀',
+    role: 'employee',
+    description: '업무 요청을 보내는 일반 직원',
+  },
+  {
+    userId: 'emp-kim',
+    name: '김철수',
+    department: '생산관리팀',
+    role: 'employee',
+    description: '업무 요청을 보내는 일반 직원',
+  },
+  {
+    userId: 'sec-park',
+    name: '박보안',
+    department: '정보보안팀',
+    role: 'approver',
+    description: '위험 요청의 승인·반려를 처리한다',
+  },
+  {
+    userId: 'aud-lee',
+    name: '이감사',
+    department: '감사팀',
+    role: 'auditor',
+    description: '감사 로그를 조회한다. 승인 처리는 할 수 없다',
+  },
+]
 
 let standardDelay: DelayRange = { ...DEFAULT_DELAY }
 let internalDelay: DelayRange = { ...DEFAULT_INTERNAL_DELAY }
@@ -44,6 +78,72 @@ let sequence = 0
 const inspections = new Map<string, InspectionResult>()
 const approvalStatuses = new Map<string, ApprovalStatus>()
 const falsePositiveReportKeys = new Set<string>()
+
+function isSession(value: unknown): value is Session {
+  if (typeof value !== 'object' || value === null) {
+    return false
+  }
+
+  const session = value as Record<string, unknown>
+  return typeof session.userId === 'string'
+    && typeof session.name === 'string'
+    && typeof session.department === 'string'
+    && (session.role === 'employee' || session.role === 'approver' || session.role === 'auditor')
+}
+
+export async function listDemoAccounts(): Promise<DemoAccount[]> {
+  return demoAccounts.map((account) => ({ ...account }))
+}
+
+export async function login(userId: string): Promise<Session> {
+  const account = demoAccounts.find((candidate) => candidate.userId === userId)
+  if (!account) {
+    throw new Error('데모 계정을 찾을 수 없다.')
+  }
+
+  const session: Session = {
+    userId: account.userId,
+    name: account.name,
+    department: account.department,
+    role: account.role,
+  }
+
+  try {
+    globalThis.sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session))
+  } catch {
+    // 저장소를 사용할 수 없는 환경에서도 현재 로그인 시도 자체는 완료한다.
+  }
+
+  return session
+}
+
+export async function logout(): Promise<void> {
+  try {
+    globalThis.sessionStorage.removeItem(SESSION_STORAGE_KEY)
+  } catch {
+    // 저장소 접근이 차단된 환경에서는 지울 세션도 지속되지 않는다.
+  }
+}
+
+export function getStoredSession(): Session | null {
+  try {
+    const stored = globalThis.sessionStorage.getItem(SESSION_STORAGE_KEY)
+    if (!stored) {
+      return null
+    }
+
+    const session: unknown = JSON.parse(stored)
+    return isSession(session) ? session : null
+  } catch {
+    return null
+  }
+}
+
+function requireAdminAccess(): void {
+  if (getStoredSession()?.role === 'employee') {
+    throw new Error('관리자 권한이 없다.')
+  }
+}
 
 const routeByGrade: Record<Grade, Route> = {
   normal: 'external_llm',
@@ -398,6 +498,8 @@ function summarizeDetections(detections: Detection[]): { label: string; count: n
 }
 
 export async function requestApproval(requestId: string): Promise<ApprovalRequestResult> {
+  // 목 지연 중 로그아웃하거나 계정을 바꿔도 요청을 시작한 사용자의 귀속을 유지한다.
+  const session = getStoredSession()
   await waitForMock(standardDelay)
   const inspection = inspections.get(requestId)
   if (!inspection) {
@@ -420,8 +522,8 @@ export async function requestApproval(requestId: string): Promise<ApprovalReques
     id: createId('approval'),
     requestId,
     at: requestedAt,
-    userName: '홍길동',
-    department: '영업팀',
+    userName: session?.name ?? '홍길동',
+    department: session?.department ?? '영업팀',
     reason: inspection.reason || '정책상 관리자 확인이 필요한 요청이다.',
     detectionSummary: summarizeDetections(inspection.detections),
     maskedPreview: inspection.maskedText,
@@ -589,6 +691,7 @@ function utcDateKey(daysAgo: number): string {
 }
 
 export async function getDashboard(): Promise<DashboardSummary> {
+  requireAdminAccess()
   await waitForMock(standardDelay)
 
   const byGrade: Record<Grade, number> = {
@@ -648,6 +751,7 @@ function normalizeTo(value: string): number | null {
 }
 
 export async function getAuditLogs(filter: AuditLogFilter = {}): Promise<AuditLogEntry[]> {
+  requireAdminAccess()
   await waitForMock(standardDelay)
   const from = filter.from ? normalizeFrom(filter.from) : null
   const to = filter.to ? normalizeTo(filter.to) : null
@@ -691,6 +795,7 @@ export async function getAuditLogs(filter: AuditLogFilter = {}): Promise<AuditLo
 }
 
 export async function getPendingApprovals(): Promise<PendingApproval[]> {
+  requireAdminAccess()
   await waitForMock(standardDelay)
   return pendingApprovals.map((approval) => ({
     ...approval,
@@ -703,6 +808,11 @@ export async function decideApproval(
   decision: ApprovalDecision,
   reason?: string,
 ): Promise<ApprovalDecisionResult> {
+  const session = getStoredSession()
+  if (session && session.role !== 'approver') {
+    throw new Error('승인 처리 권한이 없다.')
+  }
+
   await waitForMock(standardDelay)
   const index = pendingApprovals.findIndex((approval) => approval.id === id)
   const approval = pendingApprovals[index]
@@ -716,7 +826,7 @@ export async function decideApproval(
 
   pendingApprovals.splice(index, 1)
   const decidedAt = new Date().toISOString()
-  const decidedBy = '보안 관리자'
+  const decidedBy = session?.name ?? '보안 관리자'
   const currentStatus = approvalStatuses.get(approval.requestId)
   approvalStatuses.set(approval.requestId, {
     approvalId: approval.id,
@@ -740,9 +850,7 @@ export async function decideApproval(
         ? 'masked_external'
         : 'blocked',
     detectionCounts: approval.detectionSummary.map((item) => ({ ...item })),
-  }
-  if (decision !== 'rejected') {
-    auditEntry.approvedBy = decidedBy
+    approvedBy: decidedBy,
   }
   auditLogs.unshift(auditEntry)
 

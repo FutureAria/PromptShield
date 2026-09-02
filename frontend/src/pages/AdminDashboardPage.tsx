@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { getDashboard, getPendingApprovals } from '../api'
 import type { DashboardSummary, Grade, PendingApproval } from '../api/types'
+import { useSession } from '../auth/SessionContext'
 import { GradeBadge, gradeLabels } from '../components/Status'
 
 const gradeOrder: Grade[] = ['normal', 'caution', 'confidential', 'blocked']
@@ -26,6 +27,7 @@ function formatDateTime(value: string) {
 }
 
 export default function AdminDashboardPage() {
+  const { session } = useSession()
   const [summary, setSummary] = useState<DashboardSummary | null>(null)
   const [pending, setPending] = useState<PendingApproval[]>([])
   const [loading, setLoading] = useState(true)
@@ -105,9 +107,11 @@ export default function AdminDashboardPage() {
             <p className="admin-section__label">먼저 할 일</p>
             <h2 id="pending-heading">승인 대기</h2>
           </div>
-          <Link className="admin-text-link" to="/admin/approvals">
-            전체 대기 요청 보기
-          </Link>
+          {session?.role === 'approver' && (
+            <Link className="admin-text-link" to="/admin/approvals">
+              전체 대기 요청 보기
+            </Link>
+          )}
         </div>
 
         <div className="pending-overview">
