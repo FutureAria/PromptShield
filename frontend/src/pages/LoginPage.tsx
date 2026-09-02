@@ -1,14 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
-import { listDemoAccounts } from '../api'
+import { listDemoAccounts, ROLE_LABELS } from '../api'
 import type { DemoAccount, UserRole } from '../api/types'
 import { useSession } from '../auth/SessionContext'
-
-const roleLabels: Record<UserRole, string> = {
-  employee: '직원',
-  approver: '승인자',
-  auditor: '감사자',
-}
 
 const defaultRouteByRole: Record<UserRole, string> = {
   employee: '/',
@@ -137,7 +131,7 @@ export default function LoginPage() {
                       <span className="demo-account-card__heading">
                         <strong id={`${accountId}-name`}>{account.name}</strong>
                         <span className="role-badge" id={`${accountId}-role`}>
-                          {roleLabels[account.role]}
+                          {ROLE_LABELS[account.role]}
                         </span>
                       </span>
                       <span

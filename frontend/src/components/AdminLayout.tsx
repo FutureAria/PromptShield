@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom'
+import { can } from '../api'
 import { useSession } from '../auth/SessionContext'
 import '../styles/admin.css'
 
@@ -20,11 +21,17 @@ export function AdminLayout() {
           <NavLink to="/admin/logs" className={({ isActive }) => isActive ? 'admin-nav__link is-active' : 'admin-nav__link'}>
             감사 로그
           </NavLink>
-          {session?.role === 'approver' && (
+          {session && can(session.role, 'admin.approvals.decide') && (
             <NavLink to="/admin/approvals" className={({ isActive }) => isActive ? 'admin-nav__link is-active' : 'admin-nav__link'}>
               승인 대기
             </NavLink>
           )}
+          <NavLink to="/admin/dictionary" className={({ isActive }) => isActive ? 'admin-nav__link is-active' : 'admin-nav__link'}>
+            기업 사전
+          </NavLink>
+          <NavLink to="/admin/users" className={({ isActive }) => isActive ? 'admin-nav__link is-active' : 'admin-nav__link'}>
+            사용자·권한
+          </NavLink>
         </nav>
 
         <p className="admin-sidebar__note">

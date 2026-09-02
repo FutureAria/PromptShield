@@ -76,7 +76,7 @@ export function InspectionComparison({
   result,
   reportedDetectionIds = noDetectionIds,
   reportingDetectionIds = noDetectionIds,
-  onReportFalsePositive = () => undefined,
+  onReportFalsePositive,
 }: InspectionComparisonProps) {
   if (result.detections.length === 0) {
     return (
@@ -93,6 +93,7 @@ export function InspectionComparison({
   )
   const originalLabelId = `original-label-${result.requestId}`
   const transmissionLabelId = `transmission-label-${result.requestId}`
+  const detectionsHeadingId = `detections-heading-${result.requestId}`
 
   return (
     <div className="comparison-wrap">
@@ -158,8 +159,8 @@ export function InspectionComparison({
         </section>
       </div>
 
-      <section className="detections" aria-labelledby="detections-heading">
-        <div className="detections__heading" id="detections-heading">
+      <section className="detections" aria-labelledby={detectionsHeadingId}>
+        <div className="detections__heading" id={detectionsHeadingId}>
           <span>탐지 항목</span>
           <span className="mono">{acceptedDetections.length}건</span>
         </div>
@@ -181,7 +182,7 @@ export function InspectionComparison({
                   <span className="detections__reported" role="status">
                     신고 접수
                   </span>
-                ) : (
+                ) : onReportFalsePositive ? (
                   <button
                     className="text-button"
                     disabled={reporting}
@@ -190,7 +191,7 @@ export function InspectionComparison({
                   >
                     {reporting ? '접수 중' : '오탐 신고'}
                   </button>
-                )}
+                ) : null}
               </li>
             )
           })}

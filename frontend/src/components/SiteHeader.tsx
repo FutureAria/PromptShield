@@ -1,12 +1,6 @@
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
-import type { UserRole } from '../api/types'
+import { can, ROLE_LABELS } from '../api'
 import { useSession } from '../auth/SessionContext'
-
-const roleLabels: Record<UserRole, string> = {
-  employee: '직원',
-  approver: '승인자',
-  auditor: '감사자',
-}
 
 export function SiteHeader() {
   const { pathname } = useLocation()
@@ -14,7 +8,7 @@ export function SiteHeader() {
   const { session, signOut, isLoading } = useSession()
   const isAdmin = pathname.startsWith('/admin')
   const isLogin = pathname === '/login'
-  const canAccessAdmin = session?.role === 'approver' || session?.role === 'auditor'
+  const canAccessAdmin = session ? can(session.role, 'admin.dashboard.view') : false
 
   async function handleSignOut() {
     await signOut()
@@ -51,7 +45,7 @@ export function SiteHeader() {
             <div className="session-summary" aria-label="로그인 사용자">
               <strong>{session.name}</strong>
               <span className="session-summary__department">{session.department}</span>
-              <span className="role-badge">{roleLabels[session.role]}</span>
+              <span className="role-badge">{ROLE_LABELS[session.role]}</span>
             </div>
 
             <button

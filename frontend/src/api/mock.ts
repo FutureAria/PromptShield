@@ -11,12 +11,37 @@ import type {
   DemoAccount,
   Detection,
   DetectionType,
+  DictionaryDraftCheck,
+  DictionaryDraftEntry,
+  DictionaryEntry,
+  DictionaryIssue,
+  DictionaryPreview,
+  DictionarySnapshot,
   Grade,
+  GradePolicyRow,
   InspectionResult,
+  ManagedUser,
   PendingApproval,
+  PreviewDelta,
+  RoleChangeEntry,
   Route,
   Session,
+  UserDirectory,
+  UserRole,
 } from './types'
+import { can, type Capability } from './permissions'
+import { checkRoleAssignment } from './roleAssignment'
+import {
+  commitDictionary,
+  DICTIONARY_ACTIVE_LIMIT,
+  DICTIONARY_PRIORITY,
+  dictionaryPresets,
+  getActiveDictionaryEntries,
+  probeFalsePositives,
+  readDictionary,
+  resetDictionaryStore,
+  validateDraft,
+} from './dictionary'
 
 interface DelayRange {
   min: number
@@ -39,7 +64,7 @@ const DEFAULT_INTERNAL_DELAY: DelayRange = { min: 1100, max: 1300 }
 const DEFAULT_APPROVAL_STATUS_DELAY: DelayRange = { min: 60, max: 120 }
 const SESSION_STORAGE_KEY = 'promptshield.session'
 
-const demoAccounts: readonly DemoAccount[] = [
+const initialAccounts: readonly DemoAccount[] = [
   {
     userId: 'emp-hong',
     name: '홍길동',
@@ -70,6 +95,13 @@ const demoAccounts: readonly DemoAccount[] = [
   },
 ]
 
+let accounts: DemoAccount[] = initialAccounts.map((account) => ({ ...account }))
+let roleChanges: RoleChangeEntry[] = []
+
+// 역할이 바뀌어도 데모 계정 설명(description) 문구는 초기값을 유지한다. 이번 범위에서 손대지 않는다.
+// 남의 세션은 sessionStorage 스냅숏이라 역할 변경 즉시 반영되지 않는다. 데모에서는 다시 로그인하면
+// 반영된다. 실제 백엔드는 역할이 바뀐 사용자의 세션을 서버가 무효화하거나 재발급해야 한다.
+
 let standardDelay: DelayRange = { ...DEFAULT_DELAY }
 let internalDelay: DelayRange = { ...DEFAULT_INTERNAL_DELAY }
 let approvalStatusDelay: DelayRange = { ...DEFAULT_APPROVAL_STATUS_DELAY }
@@ -92,11 +124,11 @@ function isSession(value: unknown): value is Session {
 }
 
 export async function listDemoAccounts(): Promise<DemoAccount[]> {
-  return demoAccounts.map((account) => ({ ...account }))
+  return accounts.map((account) => ({ ...account }))
 }
 
 export async function login(userId: string): Promise<Session> {
-  const account = demoAccounts.find((candidate) => candidate.userId === userId)
+  const account = accounts.find((candidate) => candidate.userId === userId)
   if (!account) {
     throw new Error('데모 계정을 찾을 수 없다.')
   }
@@ -139,9 +171,12 @@ export function getStoredSession(): Session | null {
   }
 }
 
-function requireAdminAccess(): void {
-  if (getStoredSession()?.role === 'employee') {
-    throw new Error('관리자 권한이 없다.')
+function requireCapability(capability: Capability, message: string): void {
+  const session = getStoredSession()
+  // 세션이 없는 호출은 기존 목 계약대로 통과시킨다. 로그인 없이 목 API를 직접 쓰는 테스트가 있고,
+  // 목의 역할 검사는 편의이지 보안 경계가 아니다. 실제 백엔드는 미인증 호출을 거부해야 한다.
+  if (session && !can(session.role, capability)) {
+    throw new Error(message)
   }
 }
 
@@ -243,6 +278,7 @@ function addLiteralMatches(
   candidate: Omit<DetectionCandidate, 'start' | 'end'>,
 ): void {
   for (const literal of literals) {
+    if (literal.length === 0) continue // 빈 문자열이면 fromIndex 가 전진하지 않아 무한 루프에 빠진다
     let fromIndex = 0
     while (fromIndex < text.length) {
       const start = text.indexOf(literal, fromIndex)
@@ -264,7 +300,29 @@ function rangesOverlap(first: DetectionCandidate, second: DetectionCandidate): b
   return first.start < second.end && second.start < first.end
 }
 
-function findCandidates(text: string): DetectionCandidate[] {
+function addDictionaryMatches(
+  text: string,
+  candidates: DetectionCandidate[],
+  entries: readonly DictionaryEntry[],
+): void {
+  for (const entry of entries) {
+    if (!entry.active) continue
+    const preset = dictionaryPresets[entry.entryType]
+    addLiteralMatches(text, candidates, [entry.term], {
+      type: preset.detectionType,
+      label: preset.label,
+      tokenLabel: preset.tokenLabel,
+      confidence: preset.confidence,
+      severity: entry.grade,
+      priority: DICTIONARY_PRIORITY,
+    })
+  }
+}
+
+function findCandidates(
+  text: string,
+  entries: readonly DictionaryEntry[] = getActiveDictionaryEntries(),
+): DetectionCandidate[] {
   const candidates: DetectionCandidate[] = []
 
   addRegexMatches(text, candidates, /\d{6}-\d{7}/g, {
@@ -291,14 +349,7 @@ function findCandidates(text: string): DetectionCandidate[] {
     severity: 'confidential',
     priority: 2,
   })
-  addLiteralMatches(text, candidates, ['ABC상사', '대한물산', '한빛테크'], {
-    type: 'partner',
-    label: '거래처',
-    tokenLabel: '거래처',
-    confidence: 0.96,
-    severity: 'confidential',
-    priority: 3,
-  })
+  addDictionaryMatches(text, candidates, entries)
   addRegexMatches(text, candidates, /단가\s*[\d,]+\s*원/g, {
     type: 'price',
     label: '단가',
@@ -402,14 +453,16 @@ function gradeCandidates(candidates: DetectionCandidate[]): Grade {
   ), 'normal')
 }
 
-export async function inspect(text: string): Promise<InspectionResult> {
-  const requestId = createId('req')
-  const candidates = findCandidates(text)
+function buildInspection(
+  requestId: string,
+  text: string,
+  entries: readonly DictionaryEntry[],
+  elapsedMs: number,
+): InspectionResult {
+  const candidates = findCandidates(text, entries)
   const detections = createDetections(requestId, candidates)
   const grade = gradeCandidates(candidates)
-  const elapsedMs = await waitForMock(standardDelay)
-
-  const result: InspectionResult = {
+  return {
     requestId,
     grade,
     route: routeByGrade[grade],
@@ -421,9 +474,172 @@ export async function inspect(text: string): Promise<InspectionResult> {
       : '',
     elapsedMs,
   }
+}
 
+export async function inspect(text: string): Promise<InspectionResult> {
+  const requestId = createId('req')
+  const entries = getActiveDictionaryEntries()
+  const elapsedMs = await waitForMock(standardDelay)
+  const result = buildInspection(requestId, text, entries, elapsedMs)
   inspections.set(requestId, result)
   return result
+}
+
+export class DictionaryValidationError extends Error {
+  readonly issues: DictionaryIssue[]
+
+  constructor(issues: DictionaryIssue[]) {
+    super('사전 항목에 고칠 곳이 있다.')
+    this.name = 'DictionaryValidationError'
+    this.issues = issues
+  }
+}
+
+function draftToEntries(draft: readonly DictionaryDraftEntry[]): DictionaryEntry[] {
+  return draft
+    .filter((row) => row.active)
+    .map((row) => ({
+      id: row.rowId,
+      term: row.term.trim(),
+      entryType: row.entryType,
+      grade: row.grade,
+      active: true,
+      note: row.note.trim(),
+      updatedAt: '',
+      updatedBy: '',
+    }))
+}
+
+function diffDetections(
+  saved: Detection[],
+  draft: Detection[],
+  originalText: string,
+): PreviewDelta[] {
+  const keyOf = (detection: Detection) => `${detection.start}:${detection.end}`
+  const savedByRange = new Map(saved.map((detection) => [keyOf(detection), detection]))
+  const draftByRange = new Map(draft.map((detection) => [keyOf(detection), detection]))
+  const deltas: PreviewDelta[] = []
+
+  for (const detection of draft) {
+    const previous = savedByRange.get(keyOf(detection))
+    if (!previous) {
+      deltas.push({
+        kind: 'added',
+        label: detection.label,
+        matched: originalText.slice(detection.start, detection.end),
+        start: detection.start,
+        end: detection.end,
+      })
+    } else if (previous.label !== detection.label) {
+      deltas.push({
+        kind: 'relabeled',
+        label: detection.label,
+        previousLabel: previous.label,
+        matched: originalText.slice(detection.start, detection.end),
+        start: detection.start,
+        end: detection.end,
+      })
+    }
+  }
+
+  for (const detection of saved) {
+    if (!draftByRange.has(keyOf(detection))) {
+      deltas.push({
+        kind: 'removed',
+        label: detection.label,
+        matched: originalText.slice(detection.start, detection.end),
+        start: detection.start,
+        end: detection.end,
+      })
+    }
+  }
+
+  return deltas.sort((first, second) => first.start - second.start || first.end - second.end)
+}
+
+export async function getDictionary(): Promise<DictionarySnapshot> {
+  requireCapability('admin.dictionary.view', '관리자 권한이 없다.')
+  await waitForMock(standardDelay)
+  const snapshot = readDictionary()
+  return { ...snapshot, activeLimit: DICTIONARY_ACTIVE_LIMIT }
+}
+
+export async function checkDictionaryDraft(
+  draft: readonly DictionaryDraftEntry[],
+): Promise<DictionaryDraftCheck> {
+  requireCapability('admin.dictionary.view', '관리자 권한이 없다.')
+  // 타자마다 도는 함수라 인위적 지연을 넣지 않는다.
+  const saved = readDictionary().entries
+  return {
+    issues: validateDraft(draft, saved),
+    falsePositiveHits: probeFalsePositives(draft),
+    activeCount: draft.filter((row) => row.active).length,
+    activeLimit: DICTIONARY_ACTIVE_LIMIT,
+  }
+}
+
+export async function previewInspection(
+  text: string,
+  draft?: readonly DictionaryDraftEntry[],
+): Promise<DictionaryPreview> {
+  requireCapability('admin.dictionary.view', '관리자 권한이 없다.')
+  const savedEntries = getActiveDictionaryEntries()
+  const draftEntries = draft ? draftToEntries(draft) : savedEntries
+  const elapsedMs = await waitForMock(standardDelay)
+
+  const saved = buildInspection(createId('preview-saved'), text, savedEntries, elapsedMs)
+  const drafted = buildInspection(createId('preview-draft'), text, draftEntries, elapsedMs)
+  // ★ inspections.set 을 하지 않는다. send() 가 이 requestId 를 찾지 못한다.
+  //   시험 검사가 외부 전송 경로가 되면 안 된다.
+
+  return {
+    saved,
+    draft: drafted,
+    deltas: draft ? diffDetections(saved.detections, drafted.detections, text) : [],
+    gradeChanged: draft ? saved.grade !== drafted.grade : false,
+  }
+}
+
+export async function saveDictionary(input: {
+  baseRevision: number
+  entries: DictionaryDraftEntry[]
+}): Promise<DictionarySnapshot> {
+  requireCapability('admin.dictionary.edit', '사전을 수정할 권한이 없다.')
+  const session = getStoredSession()
+  await waitForMock(standardDelay)
+
+  const current = readDictionary()
+  if (input.baseRevision !== current.revision) {
+    throw new Error('다른 관리자가 사전을 먼저 저장했다. 최신 사전을 불러온 뒤 다시 저장해 달라.')
+  }
+
+  const issues = validateDraft(input.entries, current.entries)
+  if (issues.some((issue) => issue.level === 'error')) {
+    throw new DictionaryValidationError(issues)
+  }
+
+  commitDictionary(input.entries, session?.name ?? '보안 관리자')
+  const next = readDictionary()
+  return { ...next, activeLimit: DICTIONARY_ACTIVE_LIMIT }
+}
+
+export function getGradePolicy(): GradePolicyRow[] {
+  const order: readonly Grade[] = ['normal', 'caution', 'confidential', 'blocked']
+  const employeeAction: Record<Grade, string> = {
+    normal: '경고 없이 그대로 전송한다',
+    caution: '민감 구간을 번호 토큰으로 가린 전송본을 보낸다',
+    confidential: '외부로 나가지 않고 사내에서 처리한다',
+    blocked: '전송 버튼이 잠기고 승인 요청 경로만 열린다',
+  }
+  return order.map((grade) => ({
+    grade,
+    route: routeByGrade[grade],
+    employeeAction: employeeAction[grade],
+  }))
+}
+
+export function resetMockDictionary(): void {
+  resetDictionaryStore()
 }
 
 function responseForGrade(grade: Grade): string {
@@ -691,7 +907,7 @@ function utcDateKey(daysAgo: number): string {
 }
 
 export async function getDashboard(): Promise<DashboardSummary> {
-  requireAdminAccess()
+  requireCapability('admin.dashboard.view', '관리자 권한이 없다.')
   await waitForMock(standardDelay)
 
   const byGrade: Record<Grade, number> = {
@@ -751,7 +967,7 @@ function normalizeTo(value: string): number | null {
 }
 
 export async function getAuditLogs(filter: AuditLogFilter = {}): Promise<AuditLogEntry[]> {
-  requireAdminAccess()
+  requireCapability('admin.logs.view', '관리자 권한이 없다.')
   await waitForMock(standardDelay)
   const from = filter.from ? normalizeFrom(filter.from) : null
   const to = filter.to ? normalizeTo(filter.to) : null
@@ -795,7 +1011,7 @@ export async function getAuditLogs(filter: AuditLogFilter = {}): Promise<AuditLo
 }
 
 export async function getPendingApprovals(): Promise<PendingApproval[]> {
-  requireAdminAccess()
+  requireCapability('admin.approvals.view', '관리자 권한이 없다.')
   await waitForMock(standardDelay)
   return pendingApprovals.map((approval) => ({
     ...approval,
@@ -808,10 +1024,8 @@ export async function decideApproval(
   decision: ApprovalDecision,
   reason?: string,
 ): Promise<ApprovalDecisionResult> {
+  requireCapability('admin.approvals.decide', '승인 처리 권한이 없다.')
   const session = getStoredSession()
-  if (session && session.role !== 'approver') {
-    throw new Error('승인 처리 권한이 없다.')
-  }
 
   await waitForMock(standardDelay)
   const index = pendingApprovals.findIndex((approval) => approval.id === id)
@@ -855,4 +1069,84 @@ export async function decideApproval(
   auditLogs.unshift(auditEntry)
 
   return { id, decision, status: 'decided' }
+}
+
+function toManagedUser(account: DemoAccount, session: Session | null): ManagedUser {
+  // 실제 백엔드에서는 이름이 아니라 userId 로 묶어야 한다. 데모 감사 로그에는 userId 가 없다.
+  const lastActiveAt = auditLogs
+    .filter((entry) => entry.userName === account.name || entry.approvedBy === account.name)
+    .reduce<string | undefined>((latest, entry) => (
+      !latest || entry.at > latest ? entry.at : latest
+    ), undefined)
+
+  return {
+    userId: account.userId,
+    name: account.name,
+    department: account.department,
+    role: account.role,
+    ...(lastActiveAt ? { lastActiveAt } : {}),
+    isCurrentUser: session?.userId === account.userId,
+  }
+}
+
+function buildDirectory(session: Session | null): UserDirectory {
+  const roleCounts: Record<UserRole, number> = { employee: 0, approver: 0, auditor: 0 }
+  for (const account of accounts) roleCounts[account.role] += 1
+
+  const rank: Record<UserRole, number> = { approver: 0, auditor: 1, employee: 2 }
+  const users = accounts
+    .map((account) => toManagedUser(account, session))
+    .sort((first, second) => rank[first.role] - rank[second.role]
+      || first.name.localeCompare(second.name, 'ko'))
+
+  return {
+    users,
+    roleCounts,
+    pendingApprovalCount: pendingApprovals.length,
+    // 세션이 없는 목 직접 호출은 requireCapability 와 같은 규칙으로 통과시킨다.
+    canAssign: session ? can(session.role, 'admin.users.assign') : true,
+  }
+}
+
+export async function listUsers(): Promise<UserDirectory> {
+  requireCapability('admin.users.view', '사용자·권한을 볼 수 없다.')
+  const session = getStoredSession()
+  await waitForMock(standardDelay)
+  return buildDirectory(session)
+}
+
+export async function assignRole(userId: string, role: UserRole): Promise<ManagedUser> {
+  requireCapability('admin.users.assign', '역할을 배정할 권한이 없다.')
+  const session = getStoredSession()
+  await waitForMock(standardDelay)
+
+  const { blocked } = checkRoleAssignment(buildDirectory(session), userId, role)
+  if (blocked) throw new Error(blocked.message)
+
+  const account = accounts.find((candidate) => candidate.userId === userId)
+  if (!account) throw new Error('대상 계정을 찾을 수 없다.')
+
+  const from = account.role
+  account.role = role
+  roleChanges.unshift({
+    id: createId('rolechange'),
+    at: new Date().toISOString(),
+    actorName: session?.name ?? '보안 관리자',
+    targetName: account.name,
+    from,
+    to: role,
+  })
+  return toManagedUser(account, session)
+}
+
+export async function listRoleChanges(limit = 5): Promise<RoleChangeEntry[]> {
+  requireCapability('admin.users.view', '사용자·권한을 볼 수 없다.')
+  await waitForMock(standardDelay)
+  // 실제 백엔드에서는 접속기록 보관 기준과 함께 보존 기간을 정한다.
+  return roleChanges.slice(0, limit).map((change) => ({ ...change }))
+}
+
+export function resetMockUsers(): void {
+  accounts = initialAccounts.map((account) => ({ ...account }))
+  roleChanges = []
 }

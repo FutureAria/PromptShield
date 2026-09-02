@@ -1,5 +1,6 @@
 import { Link, Navigate, useLocation } from 'react-router-dom'
 import type { ReactNode } from 'react'
+import { ROLE_LABELS, rolesWith, type Capability } from '../api'
 import type { UserRole } from '../api/types'
 import { useSession } from './SessionContext'
 
@@ -8,17 +9,11 @@ interface RequireRoleProps {
   children: ReactNode
 }
 
-const roleLabels: Record<UserRole, string> = {
-  employee: '직원',
-  approver: '승인자',
-  auditor: '감사자',
-}
-
 function AccessDenied({ role }: { role: UserRole }) {
   return (
     <main className="access-denied-page" id="main-content">
       <section className="access-denied-card" aria-labelledby="access-denied-heading">
-        <span className="role-badge">{roleLabels[role]}</span>
+        <span className="role-badge">{ROLE_LABELS[role]}</span>
         <h1 id="access-denied-heading">이 화면을 볼 권한이 없다</h1>
         <p>
           현재 계정에 허용된 화면으로 이동해 주세요. 권한이 필요하다면 사내 관리자에게 요청해야 한다.
@@ -64,6 +59,10 @@ export function RequireRole({ allow, children }: RequireRoleProps) {
   }
 
   return <>{children}</>
+}
+
+export function RequireCapability({ capability, children }: { capability: Capability; children: ReactNode }) {
+  return <RequireRole allow={rolesWith(capability)}>{children}</RequireRole>
 }
 
 export default RequireRole

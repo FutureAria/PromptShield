@@ -1,17 +1,16 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
-import { RequireRole } from './auth/RequireRole'
+import { RequireCapability } from './auth/RequireRole'
 import { SessionProvider } from './auth/SessionContext'
 import { SiteHeader } from './components/SiteHeader'
 import { AdminLayout } from './components/AdminLayout'
 import AdminDashboardPage from './pages/AdminDashboardPage'
 import ApprovalsPage from './pages/ApprovalsPage'
 import AuditLogsPage from './pages/AuditLogsPage'
+import DictionaryPage from './pages/DictionaryPage'
 import EmployeePage from './pages/EmployeePage'
 import LoginPage from './pages/LoginPage'
+import UsersPage from './pages/UsersPage'
 import './styles/auth.css'
-
-const employeeRoles = ['employee', 'approver', 'auditor'] as const
-const adminRoles = ['approver', 'auditor'] as const
 
 export default function App() {
   return (
@@ -23,26 +22,28 @@ export default function App() {
         <Route
           path="/"
           element={(
-            <RequireRole allow={employeeRoles}>
+            <RequireCapability capability="employee.inspect">
               <EmployeePage />
-            </RequireRole>
+            </RequireCapability>
           )}
         />
         <Route
           element={(
-            <RequireRole allow={adminRoles}>
+            <RequireCapability capability="admin.dashboard.view">
               <AdminLayout />
-            </RequireRole>
+            </RequireCapability>
           )}
         >
           <Route path="/admin" element={<AdminDashboardPage />} />
           <Route path="/admin/logs" element={<AuditLogsPage />} />
+          <Route path="/admin/dictionary" element={<DictionaryPage />} />
+          <Route path="/admin/users" element={<UsersPage />} />
         </Route>
         <Route
           element={(
-            <RequireRole allow={['approver']}>
+            <RequireCapability capability="admin.approvals.decide">
               <AdminLayout />
-            </RequireRole>
+            </RequireCapability>
           )}
         >
           <Route path="/admin/approvals" element={<ApprovalsPage />} />

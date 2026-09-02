@@ -1,18 +1,37 @@
 export * from './types'
+export * from './permissions'
+export * from './roleAssignment'
 export {
+  DICTIONARY_ACTIVE_LIMIT,
+  DICTIONARY_PASTE_ROW_LIMIT,
+  dictionaryPresets,
+  parseDictionaryPaste,
+} from './dictionary'
+export {
+  DictionaryValidationError,
+  assignRole,
+  checkDictionaryDraft,
   decideApproval,
   getApprovalStatus,
   getAuditLogs,
   getDashboard,
+  getDictionary,
+  getGradePolicy,
   getPendingApprovals,
   getStoredSession,
   inspect,
   listDemoAccounts,
+  listRoleChanges,
+  listUsers,
   login,
   logout,
+  previewInspection,
   reportFalsePositive,
   requestApproval,
   resetMockDelayRange,
+  resetMockDictionary,
+  resetMockUsers,
+  saveDictionary,
   send,
   setMockDelayRange,
 } from './mock'
