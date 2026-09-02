@@ -3,6 +3,7 @@ export type Route = 'external_llm' | 'internal_llm' | 'masked_external' | 'block
 export type DetectionType =
   | 'rrn' | 'phone' | 'email' | 'account'
   | 'partner' | 'price' | 'source_code' | 'api_key'
+  | 'unreadable_attachment'
 
 export type UserRole = 'employee' | 'approver' | 'auditor'
 

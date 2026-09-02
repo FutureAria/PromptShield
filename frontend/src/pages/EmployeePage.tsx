@@ -1,13 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
-import type { FormEvent, KeyboardEvent } from 'react'
+import type { ChangeEvent, DragEvent, FormEvent, KeyboardEvent } from 'react'
 import {
+  ATTACHMENT_ACCEPT,
+  ATTACHMENT_MAX_BYTES,
+  ATTACHMENT_MAX_COUNT,
+  ATTACHMENT_MAX_TOTAL_BYTES,
+  composeInspectionInput,
+  formatBytes,
   getApprovalStatus,
   getStoredSession,
   inspect,
+  readAttachment,
   reportFalsePositive,
   requestApproval,
   send,
 } from '../api'
+import type { Attachment } from '../api/attachments'
 import type {
   ApprovalState,
   ApprovalStatus,
@@ -22,19 +30,31 @@ import '../styles/employee.css'
 
 const PENDING_APPROVAL_STORAGE_KEY = 'promptshield.pendingApprovalRequestId'
 
+interface AttachmentChip {
+  id: string
+  fileName: string
+  sizeBytes: number
+  note: string
+}
+
 interface EmployeeMessage extends ChatMessage {
   approvalState?: ApprovalState
+  // 본인 화면의 메모리 안에서만 보여 준다. 관리·감사 API에는 전달하지 않는다.
+  attachmentChips?: AttachmentChip[]
 }
 
 interface ApprovalRoundTripContext {
   requestId: string
   inspection: InspectionResult
+  draft: string
+  attachments: Attachment[]
   userId: string | null
 }
 
 // SPA 안에서 관리자 화면을 왕복할 때만 쓰는 메모리 컨텍스트다.
 // 원문이나 검사 결과를 sessionStorage 등 영속 저장소에 기록하지 않는다.
 let approvalRoundTripContext: ApprovalRoundTripContext | null = null
+let attachmentSequence = 0
 
 const approvalMessageLabels: Record<ApprovalState, string> = {
   pending: '승인 요청함',
@@ -72,13 +92,16 @@ function clearPendingApprovalRequestId(requestId: string): void {
 function createApprovalMessage(
   inspection: InspectionResult,
   approvalState: ApprovalState,
+  draft: string,
+  attachments: readonly Attachment[],
 ): EmployeeMessage {
   return {
     id: `user-${inspection.requestId}`,
     role: 'user',
-    text: inspection.originalText,
+    text: draft,
     inspection,
     approvalState,
+    attachmentChips: createAttachmentChips(attachments),
   }
 }
 
@@ -86,17 +109,127 @@ function upsertApprovalMessage(
   messages: EmployeeMessage[],
   inspection: InspectionResult,
   approvalState: ApprovalState,
+  draft: string,
+  attachments: readonly Attachment[],
 ): EmployeeMessage[] {
   const messageId = `user-${inspection.requestId}`
   const exists = messages.some(({ id }) => id === messageId)
 
   if (!exists) {
-    return [...messages, createApprovalMessage(inspection, approvalState)]
+    return [
+      ...messages,
+      createApprovalMessage(inspection, approvalState, draft, attachments),
+    ]
   }
 
   return messages.map((message) => (
     message.id === messageId ? { ...message, approvalState } : message
   ))
+}
+
+function nextAttachmentId(): string {
+  attachmentSequence += 1
+  return `attachment-${attachmentSequence}`
+}
+
+function extensionOf(fileName: string): string {
+  const lastDot = fileName.lastIndexOf('.')
+  return lastDot > 0 ? fileName.slice(lastDot).toLowerCase() : ''
+}
+
+const extensionsBySniffedFormat: Record<string, readonly string[]> = {
+  PDF: ['.pdf'],
+  'ZIP 계열 문서': ['.zip', '.docx', '.xlsx', '.pptx', '.hwpx', '.odt', '.ods', '.odp'],
+  'OLE 문서': ['.hwp', '.doc', '.xls', '.ppt'],
+  'PNG 이미지': ['.png'],
+  'JPEG 이미지': ['.jpg', '.jpeg'],
+  'GIF 이미지': ['.gif'],
+  'RIFF 미디어': ['.webp', '.wav', '.avi'],
+  'RAR 압축 파일': ['.rar'],
+}
+
+function hasMismatchedExtension(attachment: Attachment): boolean {
+  if (!attachment.sniffed || !attachment.extension) return false
+  const expected = extensionsBySniffedFormat[attachment.sniffed]
+  return expected !== undefined && !expected.includes(attachment.extension)
+}
+
+function attachmentNote(attachment: Attachment): string {
+  switch (attachment.verdict) {
+    case 'reading':
+      return '읽는 중'
+    case 'readable':
+      return `${(attachment.charCount ?? 0).toLocaleString('ko-KR')}자`
+    case 'empty':
+      return '빈 파일'
+    case 'unreadable':
+      return '판정 불가 · 내용 미전송'
+  }
+}
+
+function createAttachmentChips(attachments: readonly Attachment[]): AttachmentChip[] | undefined {
+  if (attachments.length === 0) return undefined
+  return attachments.map((attachment) => ({
+    id: attachment.id,
+    fileName: attachment.fileName,
+    sizeBytes: attachment.sizeBytes,
+    note: attachmentNote(attachment),
+  }))
+}
+
+function isMechanicalAttachmentNote(note: string): boolean {
+  return /^[\d,]+자$/.test(note)
+}
+
+function attachmentClass(attachment: Attachment): string {
+  return attachment.verdict === 'unreadable'
+    ? 'attachment attachment--unreadable'
+    : 'attachment'
+}
+
+function attachmentStateCopy(attachment: Attachment) {
+  if (attachment.verdict === 'reading') {
+    return '읽는 중이다.'
+  }
+
+  if (attachment.verdict === 'readable') {
+    return (
+      <>
+        <span className="attachment__fact">
+          {(attachment.charCount ?? 0).toLocaleString('ko-KR')}자
+        </span>
+        <span aria-hidden="true"> · </span>
+        <span className="attachment__fact">
+          {attachment.encoding === 'euc-kr' ? 'EUC-KR' : 'UTF-8'}
+        </span>
+      </>
+    )
+  }
+
+  if (attachment.verdict === 'empty') {
+    return '빈 파일이다. 검사할 내용이 없다.'
+  }
+
+  switch (attachment.reason) {
+    case 'binary_format':
+      if (attachment.sniffed && hasMismatchedExtension(attachment)) {
+        return (
+          <>
+            판정 불가 — 확장자는{' '}
+            <span className="attachment__fact">{attachment.extension}</span>
+            인데 실제 내용은 {attachment.sniffed}다. 내용을 확인할 수 없어 전송할 수 없다.
+          </>
+        )
+      }
+      return '판정 불가 — 이 형식은 내용을 확인할 수 없다. 필요한 부분만 텍스트로 붙여넣는다.'
+    case 'encoding_unknown':
+      return '판정 불가 — 글자 인코딩을 알아내지 못했다. 메모장에서 UTF-8로 다시 저장한 뒤 붙인다.'
+    case 'too_long':
+      return '판정 불가 — 20,000자를 넘어 검사하지 못했다. 필요한 부분만 텍스트로 붙여넣는다.'
+    case 'read_failed':
+    default:
+      return '판정 불가 — 파일을 읽지 못했다. 제거한 뒤 다시 붙인다.'
+  }
 }
 
 function updateApprovalMessage(
@@ -176,6 +309,9 @@ function RouteLabel({ route }: { route: Route }) {
 export default function EmployeePage() {
   const [messages, setMessages] = useState<EmployeeMessage[]>([])
   const [draft, setDraft] = useState('')
+  const [attachments, setAttachments] = useState<Attachment[]>([])
+  const [attachmentNotice, setAttachmentNotice] = useState('')
+  const [isDropping, setIsDropping] = useState(false)
   const [inspection, setInspection] = useState<InspectionResult | null>(null)
   const [isInspecting, setIsInspecting] = useState(false)
   const [isSending, setIsSending] = useState(false)
@@ -192,6 +328,18 @@ export default function EmployeePage() {
   )
   const [error, setError] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const dragDepthRef = useRef(0)
+  const attachmentsRef = useRef<Attachment[]>([])
+
+  const isBusy = (
+    isInspecting
+    || isSending
+    || isRequestingApproval
+    || isRestoringApproval
+    || approvalStatus !== null
+  )
+  const hasReadingAttachment = attachments.some(({ verdict }) => verdict === 'reading')
+  const unreadableCount = attachments.filter(({ verdict }) => verdict === 'unreadable').length
 
   useEffect(() => {
     const storedRequestId = readPendingApprovalRequestId()
@@ -230,10 +378,18 @@ export default function EmployeePage() {
         }
 
         setInspection(context.inspection)
-        setDraft(context.inspection.originalText)
+        setDraft(context.draft)
+        attachmentsRef.current = context.attachments
+        setAttachments(context.attachments)
         setApprovalStatus(status)
         setMessages((current) => (
-          upsertApprovalMessage(current, context.inspection, status.state)
+          upsertApprovalMessage(
+            current,
+            context.inspection,
+            status.state,
+            context.draft,
+            context.attachments,
+          )
         ))
       } catch {
         if (active) {
@@ -269,6 +425,9 @@ export default function EmployeePage() {
           setApprovalStatus(null)
           setInspection(null)
           setDraft('')
+          attachmentsRef.current = []
+          setAttachments([])
+          setAttachmentNotice('')
           setMessages((current) => (
             current.filter(({ id }) => id !== `user-${requestId}`)
           ))
@@ -311,11 +470,144 @@ export default function EmployeePage() {
     setError(null)
   }
 
+  const changeAttachments = (
+    updater: (current: Attachment[]) => Attachment[],
+  ) => {
+    const current = attachmentsRef.current
+    const next = updater(current)
+    if (next === current) return
+
+    attachmentsRef.current = next
+    setAttachments(next)
+
+    // 첨부가 달라진 뒤 이전 결과를 전송할 수 없도록 즉시 폐기한다.
+    if (inspection) resetInspectionState()
+    else if (error) setError(null)
+  }
+
+  const handleFilesChosen = (files: FileList | readonly File[]) => {
+    if (isBusy) return
+
+    const selectedFiles = Array.from(files)
+    if (selectedFiles.length === 0) return
+
+    const current = attachmentsRef.current
+    const readingAttachments: { attachment: Attachment; file: File }[] = []
+    let nextCount = current.length
+    let nextTotalBytes = current.reduce((sum, attachment) => (
+      sum + attachment.sizeBytes
+    ), 0)
+    let notice = ''
+
+    for (let index = 0; index < selectedFiles.length; index += 1) {
+      const file = selectedFiles[index]
+
+      if (nextCount >= ATTACHMENT_MAX_COUNT) {
+        const refusedCount = selectedFiles.length - index
+        notice = `첨부는 3개까지 붙일 수 있다. ${refusedCount}개는 붙이지 않았다.`
+        break
+      }
+
+      if (file.size > ATTACHMENT_MAX_BYTES) {
+        notice = `${file.name}는 ${formatBytes(file.size)}다. 파일 하나는 1MB까지 붙일 수 있다. 필요한 부분만 텍스트로 붙여넣는다.`
+        continue
+      }
+
+      if (nextTotalBytes + file.size > ATTACHMENT_MAX_TOTAL_BYTES) {
+        notice = `첨부 합계 2MB를 넘어 ${file.name}는 붙이지 않았다.`
+        continue
+      }
+
+      const id = nextAttachmentId()
+      readingAttachments.push({
+        attachment: {
+          id,
+          fileName: file.name,
+          sizeBytes: file.size,
+          extension: extensionOf(file.name),
+          verdict: 'reading',
+        },
+        file,
+      })
+      nextCount += 1
+      nextTotalBytes += file.size
+    }
+
+    if (readingAttachments.length === 0) {
+      if (notice) setAttachmentNotice(notice)
+      return
+    }
+
+    changeAttachments((items) => [
+      ...items,
+      ...readingAttachments.map(({ attachment }) => attachment),
+    ])
+    setAttachmentNotice(
+      notice || `파일 ${readingAttachments.length}개를 첨부했다. 내용을 읽고 있다.`,
+    )
+
+    readingAttachments.forEach(({ attachment, file }) => {
+      void readAttachment(attachment.id, file).then((result) => {
+        changeAttachments((items) => (
+          items.some(({ id }) => id === attachment.id)
+            ? items.map((item) => (item.id === attachment.id ? result : item))
+            : items
+        ))
+      })
+    })
+  }
+
+  const handleAttachmentInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = event.currentTarget.files
+    if (files) handleFilesChosen(files)
+    // 같은 파일을 제거한 뒤 곧바로 다시 고를 수 있게 선택값만 비운다.
+    event.currentTarget.value = ''
+  }
+
+  const handleAttachmentRemove = (id: string) => {
+    if (isBusy) return
+    const index = attachmentsRef.current.findIndex((attachment) => attachment.id === id)
+    if (index < 0) return
+
+    changeAttachments((items) => items.filter((attachment) => attachment.id !== id))
+    setAttachmentNotice(`첨부${index + 1}을 제거했다.`)
+  }
+
+  const handleDragEnter = (event: DragEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (isBusy || !Array.from(event.dataTransfer.types).includes('Files')) return
+    dragDepthRef.current += 1
+    setIsDropping(true)
+  }
+
+  const handleDragOver = (event: DragEvent<HTMLFormElement>) => {
+    event.preventDefault()
+  }
+
+  const handleDragLeave = (event: DragEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+    if (dragDepthRef.current === 0) setIsDropping(false)
+  }
+
+  const handleDrop = (event: DragEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    dragDepthRef.current = 0
+    setIsDropping(false)
+    if (isBusy) return
+    handleFilesChosen(event.dataTransfer.files)
+  }
+
   const handleInspect = async (event?: FormEvent) => {
     event?.preventDefault()
-    if (isInspecting || isSending || isRequestingApproval || isRestoringApproval) return
+    if (isBusy) return
 
-    if (!draft.trim()) {
+    if (hasReadingAttachment) {
+      setAttachmentNotice('파일을 모두 읽은 뒤 검사할 수 있다.')
+      return
+    }
+
+    if (!draft.trim() && attachments.length === 0) {
       setError('검사할 내용을 입력해 주세요.')
       textareaRef.current?.focus()
       return
@@ -328,7 +620,7 @@ export default function EmployeePage() {
     setError(null)
 
     try {
-      const result = await inspect(draft)
+      const result = await inspect(composeInspectionInput(draft, attachments))
       setInspection(result)
     } catch {
       setError('검사를 완료하지 못했다. 잠시 후 다시 검사해 주세요.')
@@ -365,14 +657,17 @@ export default function EmployeePage() {
 
     setIsSending(true)
     setError(null)
+    const messageDraft = draft
+    const messageAttachments = attachments
 
     try {
       const assistantMessage = await send(inspection.requestId)
       const userMessage: EmployeeMessage = {
         id: `user-${inspection.requestId}`,
         role: 'user',
-        text: inspection.originalText,
+        text: messageDraft,
         inspection,
+        attachmentChips: createAttachmentChips(messageAttachments),
       }
 
       setMessages((current) => (
@@ -381,6 +676,9 @@ export default function EmployeePage() {
           : [...current, userMessage, assistantMessage]
       ))
       setDraft('')
+      attachmentsRef.current = []
+      setAttachments([])
+      setAttachmentNotice('')
       resetInspectionState()
     } catch {
       setError('요청을 처리하지 못했다. 검사 결과는 유지했으니 다시 시도해 주세요.')
@@ -403,12 +701,14 @@ export default function EmployeePage() {
       approvalRoundTripContext = {
         requestId: inspection.requestId,
         inspection,
+        draft,
+        attachments: [...attachments],
         userId: requestingUserId,
       }
       storePendingApprovalRequestId(inspection.requestId)
       setApprovalStatus(status)
       setMessages((current) => (
-        upsertApprovalMessage(current, inspection, status.state)
+        upsertApprovalMessage(current, inspection, status.state, draft, attachments)
       ))
     } catch {
       setError('승인 요청을 보내지 못했다. 잠시 후 다시 시도해 주세요.')
@@ -561,6 +861,26 @@ export default function EmployeePage() {
                   )}
                 </div>
                 <p>{message.text}</p>
+                {message.attachmentChips?.length ? (
+                  <ul className="message__attachments" aria-label="첨부 파일">
+                    {message.attachmentChips.map((chip) => (
+                      <li className="message__attachment" key={chip.id}>
+                        <span aria-hidden="true">📎</span>
+                        <span className="message__attachment-name" title={chip.fileName}>
+                          {chip.fileName}
+                        </span>
+                        <span aria-hidden="true">·</span>
+                        <span className="attachment__size">{formatBytes(chip.sizeBytes)}</span>
+                        <span aria-hidden="true">·</span>
+                        <span className={
+                          isMechanicalAttachmentNote(chip.note) ? 'attachment__fact' : undefined
+                        }>
+                          {chip.note}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
               </li>
             ))}
           </ol>
@@ -572,18 +892,19 @@ export default function EmployeePage() {
           <h2 id="composer-heading">보낼 내용</h2>
           <span className="keyboard-hint">⌘/Ctrl + Enter</span>
         </div>
-        <form className="composer" onSubmit={(event) => void handleInspect(event)}>
+        <form
+          className={`composer${isDropping ? ' composer--dropping' : ''}`}
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
+          onSubmit={(event) => void handleInspect(event)}
+        >
           <label className="sr-only" htmlFor="prompt-input">
             AI에게 보낼 내용
           </label>
           <textarea
-            disabled={
-              isInspecting
-              || isSending
-              || isRequestingApproval
-              || isRestoringApproval
-              || approvalStatus !== null
-            }
+            disabled={isBusy}
             id="prompt-input"
             onChange={(event) => handleDraftChange(event.target.value)}
             onKeyDown={handleComposerKeyDown}
@@ -592,24 +913,75 @@ export default function EmployeePage() {
             rows={5}
             value={draft}
           />
+          {attachments.length > 0 && (
+            <ul className="attachments">
+              {attachments.map((attachment, index) => (
+                <li className={attachmentClass(attachment)} key={attachment.id}>
+                  <div className="attachment__head">
+                    <span className="attachment__ordinal">첨부{index + 1}</span>
+                    <span className="attachment__name" title={attachment.fileName}>
+                      {attachment.fileName}
+                    </span>
+                    <span className="attachment__size">
+                      {formatBytes(attachment.sizeBytes)}
+                    </span>
+                    <button
+                      aria-label={`첨부${index + 1} 제거`}
+                      className="text-button"
+                      disabled={isBusy}
+                      onClick={() => handleAttachmentRemove(attachment.id)}
+                      type="button"
+                    >
+                      제거
+                    </button>
+                  </div>
+                  <p className="attachment__state">{attachmentStateCopy(attachment)}</p>
+                </li>
+              ))}
+            </ul>
+          )}
           <div className="composer__footer">
-            <span className="composer__count mono">{draft.length}자</span>
-            <button
-              className="button button--primary composer__submit"
-              disabled={
-                isInspecting
-                || isSending
-                || isRequestingApproval
-                || isRestoringApproval
-                || approvalStatus !== null
-                || !draft.trim()
-              }
-              type="submit"
-            >
-              {isInspecting ? '검사 중' : '검사'}
-            </button>
+            <span className="composer__count mono">
+              {draft.length}자
+              {attachments.length > 0 ? ` · 첨부 ${attachments.length}건` : ''}
+            </span>
+            <div className="composer__actions">
+              <label className="button button--secondary composer__attach" htmlFor="attachment-input">
+                파일 첨부
+              </label>
+              <input
+                accept={ATTACHMENT_ACCEPT}
+                className="sr-only"
+                disabled={isBusy}
+                id="attachment-input"
+                multiple
+                onChange={handleAttachmentInputChange}
+                type="file"
+              />
+              <button
+                className="button button--primary composer__submit"
+                disabled={
+                  isBusy
+                  || hasReadingAttachment
+                  || (!draft.trim() && attachments.length === 0)
+                }
+                type="submit"
+              >
+                {isInspecting ? '검사 중' : '검사'}
+              </button>
+            </div>
           </div>
         </form>
+        {attachments.length > 0 && (
+          <p className="attachments__hint">
+            파일 이름은 검사·전송·기록 어디에도 남기지 않는다. 첨부는 순번으로만 표시한다.
+          </p>
+        )}
+        {attachmentNotice && (
+          <p aria-live="polite" className="attachments__notice" role="status">
+            {attachmentNotice}
+          </p>
+        )}
       </section>
 
       <div aria-live="polite">
@@ -670,6 +1042,18 @@ export default function EmployeePage() {
               <dt>탐지</dt>
               <dd className="mono">{inspection.detections.length}건</dd>
             </div>
+            {attachments.length > 0 && (
+              <div>
+                <dt>첨부</dt>
+                <dd className="mono">{attachments.length}건</dd>
+              </div>
+            )}
+            {unreadableCount > 0 && (
+              <div>
+                <dt>판정 불가</dt>
+                <dd className="mono">{unreadableCount}건</dd>
+              </div>
+            )}
           </dl>
 
           {inspection.reason
@@ -687,6 +1071,12 @@ export default function EmployeePage() {
             reportingDetectionIds={reportingDetectionIds}
             result={inspection}
           />
+
+          {unreadableCount > 0 && (
+            <p className="inspection-card__attachment-note">
+              판정 불가 첨부의 내용은 읽지 못했으므로 전송되지 않는다. 본문과 읽어낸 첨부만 나간다.
+            </p>
+          )}
 
           {isSending && (
             <p className="inspection-card__progress" role="status">
@@ -756,6 +1146,12 @@ export default function EmployeePage() {
                 </div>
               )}
             </div>
+          )}
+
+          {attachments.length > 0 && (
+            <p className="inspection-card__attachment-clear">
+              전송하면 첨부 {attachments.length}건이 목록에서 비워진다.
+            </p>
           )}
 
           {inspectionActions && (

@@ -58,6 +58,9 @@
 .employee-page .route-label,
 .keyboard-hint,
 .composer__count,
+.attachment__ordinal,
+.attachment__size,
+.attachment__fact,
 .inspection-card__facts dd,
 .detections__offset,
 .detections__replacement,
@@ -165,6 +168,35 @@
   white-space: pre-wrap;
 }
 
+.message__attachments {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 10px 0 0;
+  border-top: 1px solid var(--border);
+  list-style: none;
+}
+
+.message__attachment {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.message__attachment-name {
+  min-width: 0;
+  max-width: min(100%, 280px);
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .composer-section {
   margin-bottom: 16px;
 }
@@ -181,6 +213,10 @@
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   background: var(--paper);
+}
+
+.composer--dropping {
+  border-width: 2px;
 }
 
 .composer:focus-within {
@@ -223,6 +259,102 @@
 .composer__count {
   padding-left: 8px;
   color: var(--muted);
+}
+
+.composer__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.composer__attach {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.composer__actions:focus-within .composer__attach {
+  outline: 3px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.attachments {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0 12px 12px;
+  list-style: none;
+}
+
+.attachment {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink-2);
+}
+
+.attachment--unreadable {
+  border-color: var(--blocked-line);
+  background: var(--blocked-bg);
+  color: var(--blocked-fg);
+}
+
+.attachment__head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.attachment__ordinal,
+.attachment__size {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.attachment--unreadable .attachment__ordinal,
+.attachment--unreadable .attachment__size {
+  color: var(--blocked-fg);
+}
+
+.attachment__name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment--unreadable .attachment__name,
+.attachment--unreadable .text-button {
+  color: var(--blocked-fg);
+}
+
+.attachment__state {
+  margin: 5px 0 0;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.attachments__hint,
+.attachments__notice {
+  margin: 8px 4px 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.attachments__hint {
+  color: var(--muted);
+}
+
+.attachments__notice {
+  color: var(--ink-2);
 }
 
 .employee-page .button,
@@ -499,11 +631,13 @@
 }
 
 .comparison__text {
+  max-height: 360px;
   margin: 0;
   color: var(--ink);
   font-size: 14px;
   line-height: 1.9;
   overflow-wrap: anywhere;
+  overflow-y: auto;
   white-space: pre-wrap;
 }
 
@@ -689,6 +823,24 @@
   line-height: 1.6;
 }
 
+.inspection-card__attachment-note {
+  margin: 0 20px 16px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.inspection-card__attachment-clear {
+  margin: 0 20px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .approval-status {
   margin: 0 20px 16px;
   padding: 14px;
@@ -810,6 +962,33 @@
     width: 94%;
   }
 
+  .composer__footer {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .composer__actions {
+    margin-left: auto;
+  }
+
+  .attachments {
+    padding: 0 8px 8px;
+  }
+
+  .attachment__head {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .attachment__head > .attachment__size {
+    grid-row: 2;
+    grid-column: 2;
+  }
+
+  .attachment__head > .text-button {
+    grid-row: 1 / span 2;
+    grid-column: 3;
+  }
+
   .inspection-card__topline {
     flex-direction: column;
     gap: 12px;
@@ -843,6 +1022,14 @@
 
   .inspection-card__progress {
     margin: 0 16px 16px;
+  }
+
+  .inspection-card__attachment-note {
+    margin: 0 16px 16px;
+  }
+
+  .inspection-card__attachment-clear {
+    margin: 0 16px 12px;
   }
 
   .approval-status {

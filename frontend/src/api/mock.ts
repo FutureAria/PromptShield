@@ -62,6 +62,7 @@ interface DetectionCandidate {
 const DEFAULT_DELAY: DelayRange = { min: 200, max: 700 }
 const DEFAULT_INTERNAL_DELAY: DelayRange = { min: 1100, max: 1300 }
 const DEFAULT_APPROVAL_STATUS_DELAY: DelayRange = { min: 60, max: 120 }
+const APPROVAL_PREVIEW_LIMIT = 500
 const SESSION_STORAGE_KEY = 'promptshield.session'
 
 const initialAccounts: readonly DemoAccount[] = [
@@ -325,6 +326,18 @@ function findCandidates(
 ): DetectionCandidate[] {
   const candidates: DetectionCandidate[] = []
 
+  // 검사기가 내용을 확인하지 못한 첨부다. 추정이 아니라 사실이므로 confidence는 1이다.
+  // 등급 계산에 별도 분기를 두지 않고 탐지 후보로 만들어, 기존 gradeCandidates가
+  // 자동으로 blocked를 뽑게 한다. 판정 불가가 '일반'으로 통과하는 경로를 구조적으로 없앤다.
+  addRegexMatches(text, candidates, /^--- 첨부\d+ · 내용을 읽지 못함 ---$/gm, {
+    type: 'unreadable_attachment',
+    label: '판정 불가',
+    tokenLabel: '판독불가',
+    confidence: 1,
+    severity: 'blocked',
+    priority: 0,
+  })
+
   addRegexMatches(text, candidates, /\d{6}-\d{7}/g, {
     type: 'rrn',
     label: '주민등록번호',
@@ -462,6 +475,13 @@ function buildInspection(
   const candidates = findCandidates(text, entries)
   const detections = createDetections(requestId, candidates)
   const grade = gradeCandidates(candidates)
+  const hasUnreadable = candidates.some((candidate) => (
+    candidate.type === 'unreadable_attachment'
+  ))
+  const hasOtherBlocked = candidates.some((candidate) => (
+    candidate.severity === 'blocked' && candidate.type !== 'unreadable_attachment'
+  ))
+
   return {
     requestId,
     grade,
@@ -469,9 +489,13 @@ function buildInspection(
     detections,
     originalText: text,
     maskedText: maskText(text, detections),
-    reason: grade === 'blocked'
-      ? '고유식별정보 또는 비밀 키가 포함되어 전송을 차단했다. 해당 구간을 지우고 다시 검사하거나 관리자 승인을 요청한다.'
-      : '',
+    reason: grade !== 'blocked'
+      ? ''
+      : hasUnreadable && hasOtherBlocked
+        ? '첨부한 파일의 내용을 확인하지 못했고, 고유식별정보 또는 비밀 키도 함께 있어 전송을 차단했다. 해당 구간을 지우고 파일을 뺀 뒤 다시 검사하거나 관리자 승인을 요청한다.'
+        : hasUnreadable
+          ? '첨부한 파일의 내용을 확인하지 못해 전송을 차단했다. 파일을 빼고 필요한 부분만 붙여넣거나 관리자 승인을 요청한다.'
+          : '고유식별정보 또는 비밀 키가 포함되어 전송을 차단했다. 해당 구간을 지우고 다시 검사하거나 관리자 승인을 요청한다.',
     elapsedMs,
   }
 }
@@ -713,6 +737,15 @@ function summarizeDetections(detections: Detection[]): { label: string; count: n
   return [...counts].map(([label, count]) => ({ label, count }))
 }
 
+// 첨부가 붙으면 maskedText가 수만 자가 되어 승인 대기 표가 터진다.
+// 마스킹본이라 원문 값은 없지만, 마스킹되지 않은 나머지 본문 전체가
+// 관리자에게 그대로 보이는 문제가 남는다. 관리 화면을 새 유출 경로로 만들지 않는다.
+function approvalPreview(maskedText: string): string {
+  return maskedText.length <= APPROVAL_PREVIEW_LIMIT
+    ? maskedText
+    : `${maskedText.slice(0, APPROVAL_PREVIEW_LIMIT)}… 생략 ${maskedText.length - APPROVAL_PREVIEW_LIMIT}자`
+}
+
 export async function requestApproval(requestId: string): Promise<ApprovalRequestResult> {
   // 목 지연 중 로그아웃하거나 계정을 바꿔도 요청을 시작한 사용자의 귀속을 유지한다.
   const session = getStoredSession()
@@ -742,7 +775,7 @@ export async function requestApproval(requestId: string): Promise<ApprovalReques
     department: session?.department ?? '영업팀',
     reason: inspection.reason || '정책상 관리자 확인이 필요한 요청이다.',
     detectionSummary: summarizeDetections(inspection.detections),
-    maskedPreview: inspection.maskedText,
+    maskedPreview: approvalPreview(inspection.maskedText),
   }
   pendingApprovals.unshift(approval)
   approvalStatuses.set(requestId, {

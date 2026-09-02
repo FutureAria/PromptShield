@@ -168,6 +168,9 @@ export function InspectionComparison({
           {acceptedDetections.map(({ detection }) => {
             const reported = reportedDetectionIds.has(detection.id)
             const reporting = reportingDetectionIds.has(detection.id)
+            // 판정 불가는 오탐이 아니라 사실이다. 신고할 대상이 없다.
+            const reportable = onReportFalsePositive
+              && detection.type !== 'unreadable_attachment'
 
             return (
               <li className="detections__item" key={detection.id}>
@@ -182,7 +185,7 @@ export function InspectionComparison({
                   <span className="detections__reported" role="status">
                     신고 접수
                   </span>
-                ) : onReportFalsePositive ? (
+                ) : reportable ? (
                   <button
                     className="text-button"
                     disabled={reporting}

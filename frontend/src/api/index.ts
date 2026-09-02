@@ -1,4 +1,5 @@
 export * from './types'
+export * from './attachments'
 export * from './permissions'
 export * from './roleAssignment'
 export {
