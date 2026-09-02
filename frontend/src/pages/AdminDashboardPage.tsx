@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { getDashboard, getPendingApprovals } from '../api'
+import { can, getDashboard, getPendingApprovals, resetDemoState } from '../api'
 import type { DashboardSummary, Grade, PendingApproval } from '../api/types'
 import { useSession } from '../auth/SessionContext'
 import { GradeBadge, gradeLabels } from '../components/Status'
@@ -33,6 +33,10 @@ export default function AdminDashboardPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [reloadKey, setReloadKey] = useState(0)
+  const [resetConfirming, setResetConfirming] = useState(false)
+  const [resetting, setResetting] = useState(false)
+  const [resetError, setResetError] = useState('')
+  const [resetNotice, setResetNotice] = useState('')
 
   useEffect(() => {
     let active = true
@@ -65,6 +69,30 @@ export default function AdminDashboardPage() {
     () => summary ? gradeOrder.reduce((total, grade) => total + summary.byGrade[grade], 0) : 0,
     [summary],
   )
+
+  const canDecideApprovals = session
+    ? can(session.role, 'admin.approvals.decide')
+    : false
+  const canResetDemo = session
+    ? can(session.role, 'admin.demo.reset')
+    : false
+
+  async function handleDemoReset() {
+    setResetting(true)
+    setResetError('')
+    setResetNotice('')
+
+    try {
+      await resetDemoState()
+      setResetConfirming(false)
+      setResetNotice('시연용 데이터를 처음 상태로 돌렸다. 현재 로그인은 유지된다.')
+      setReloadKey((value) => value + 1)
+    } catch {
+      setResetError('시연용 데이터를 초기화하지 못했다. 잠시 후 다시 시도해 주세요.')
+    } finally {
+      setResetting(false)
+    }
+  }
 
   if (loading) {
     return (
@@ -101,13 +129,65 @@ export default function AdminDashboardPage() {
         </div>
       </header>
 
+      {canResetDemo ? (
+        <section className="demo-reset" aria-labelledby="demo-reset-heading">
+          <div className="demo-reset__copy">
+            <p className="admin-section__label">발표 복구 도구</p>
+            <h2 id="demo-reset-heading">시연용 데이터 초기화</h2>
+            <p>검사·승인·감사 로그, 기업 사전과 계정 역할을 준비된 씨앗 값으로 돌린다.</p>
+          </div>
+
+          {resetConfirming ? (
+            <div className="demo-reset__confirm" role="group" aria-label="시연용 데이터 초기화 확인">
+              <p>지금껏 만든 시연 상태가 사라진다. 초기화할까?</p>
+              <div className="demo-reset__actions">
+                <button
+                  className="admin-button admin-button--quiet"
+                  disabled={resetting}
+                  type="button"
+                  onClick={() => {
+                    setResetConfirming(false)
+                    setResetError('')
+                  }}
+                >
+                  취소
+                </button>
+                <button
+                  className="admin-button"
+                  disabled={resetting}
+                  type="button"
+                  onClick={() => void handleDemoReset()}
+                >
+                  {resetting ? '초기화하는 중' : '초기화 실행'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              className="admin-button admin-button--quiet"
+              type="button"
+              onClick={() => {
+                setResetConfirming(true)
+                setResetError('')
+                setResetNotice('')
+              }}
+            >
+              시연 데이터 초기화
+            </button>
+          )}
+
+          {resetError ? <p className="demo-reset__message" role="alert">{resetError}</p> : null}
+          {resetNotice ? <p className="demo-reset__message" role="status">{resetNotice}</p> : null}
+        </section>
+      ) : null}
+
       <section className="admin-section admin-section--priority" aria-labelledby="pending-heading">
         <div className="admin-section__heading">
           <div>
             <p className="admin-section__label">먼저 할 일</p>
             <h2 id="pending-heading">승인 대기</h2>
           </div>
-          {session?.role === 'approver' && (
+          {canDecideApprovals && (
             <Link className="admin-text-link" to="/admin/approvals">
               전체 대기 요청 보기
             </Link>

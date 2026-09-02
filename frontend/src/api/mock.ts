@@ -39,7 +39,10 @@ import {
   getActiveDictionaryEntries,
   probeFalsePositives,
   readDictionary,
+  readDictionaryStoreState,
   resetDictionaryStore,
+  restoreDictionaryStoreState,
+  type DictionaryStoreState,
   validateDraft,
 } from './dictionary'
 
@@ -64,6 +67,24 @@ const DEFAULT_INTERNAL_DELAY: DelayRange = { min: 1100, max: 1300 }
 const DEFAULT_APPROVAL_STATUS_DELAY: DelayRange = { min: 60, max: 120 }
 const APPROVAL_PREVIEW_LIMIT = 500
 const SESSION_STORAGE_KEY = 'promptshield.session'
+const MOCK_STATE_STORAGE_KEY = 'promptshield.mockState'
+const MOCK_STATE_VERSION = 1 as const
+const MOCK_STATE_MAX_BYTES = 2 * 1024 * 1024
+
+interface MockStateSnapshot {
+  version: typeof MOCK_STATE_VERSION
+  sequence: number
+  inspections: [string, InspectionResult][]
+  inspectionOwners: [string, string | null][]
+  activeInspectionRequestIds: [string | null, string][]
+  approvalStatuses: [string, ApprovalStatus][]
+  pendingApprovals: PendingApproval[]
+  auditLogs: AuditLogEntry[]
+  dictionary: DictionaryStoreState
+  accounts: DemoAccount[]
+  roleChanges: RoleChangeEntry[]
+  falsePositiveReportKeys: string[]
+}
 
 const initialAccounts: readonly DemoAccount[] = [
   {
@@ -109,6 +130,8 @@ let approvalStatusDelay: DelayRange = { ...DEFAULT_APPROVAL_STATUS_DELAY }
 let sequence = 0
 
 const inspections = new Map<string, InspectionResult>()
+const inspectionOwners = new Map<string, string | null>()
+const activeInspectionRequestIds = new Map<string | null, string>()
 const approvalStatuses = new Map<string, ApprovalStatus>()
 const falsePositiveReportKeys = new Set<string>()
 
@@ -122,6 +145,203 @@ function isSession(value: unknown): value is Session {
     && typeof session.name === 'string'
     && typeof session.department === 'string'
     && (session.role === 'employee' || session.role === 'approver' || session.role === 'auditor')
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function isGrade(value: unknown): value is Grade {
+  return value === 'normal'
+    || value === 'caution'
+    || value === 'confidential'
+    || value === 'blocked'
+}
+
+function isRoute(value: unknown): value is Route {
+  return value === 'external_llm'
+    || value === 'internal_llm'
+    || value === 'masked_external'
+    || value === 'blocked'
+}
+
+function isDetectionType(value: unknown): value is DetectionType {
+  return value === 'rrn'
+    || value === 'phone'
+    || value === 'email'
+    || value === 'account'
+    || value === 'partner'
+    || value === 'price'
+    || value === 'source_code'
+    || value === 'api_key'
+    || value === 'unreadable_attachment'
+}
+
+function isDetection(value: unknown): value is Detection {
+  if (!isRecord(value)) return false
+  return typeof value.id === 'string'
+    && isDetectionType(value.type)
+    && typeof value.label === 'string'
+    && typeof value.start === 'number' && Number.isFinite(value.start)
+    && typeof value.end === 'number' && Number.isFinite(value.end)
+    && typeof value.masked === 'string'
+    && typeof value.confidence === 'number' && Number.isFinite(value.confidence)
+}
+
+function isInspection(value: unknown): value is InspectionResult {
+  if (!isRecord(value)) return false
+  return typeof value.requestId === 'string'
+    && isGrade(value.grade)
+    && isRoute(value.route)
+    && Array.isArray(value.detections) && value.detections.every(isDetection)
+    && typeof value.originalText === 'string'
+    && typeof value.maskedText === 'string'
+    && typeof value.reason === 'string'
+    && typeof value.elapsedMs === 'number' && Number.isFinite(value.elapsedMs)
+}
+
+function isApprovalState(value: unknown): value is ApprovalState {
+  return value === 'pending'
+    || value === 'approved'
+    || value === 'conditional'
+    || value === 'rejected'
+}
+
+function isApprovalStatus(value: unknown): value is ApprovalStatus {
+  if (!isRecord(value)) return false
+  return typeof value.approvalId === 'string'
+    && typeof value.requestId === 'string'
+    && isApprovalState(value.state)
+    && typeof value.requestedAt === 'string'
+    && (value.decidedAt === undefined || typeof value.decidedAt === 'string')
+    && (value.decidedBy === undefined || typeof value.decidedBy === 'string')
+    && (value.rejectionReason === undefined || typeof value.rejectionReason === 'string')
+    && (value.consumedAt === undefined || typeof value.consumedAt === 'string')
+}
+
+function isDetectionCount(value: unknown): value is { label: string; count: number } {
+  if (!isRecord(value)) return false
+  return typeof value.label === 'string'
+    && typeof value.count === 'number'
+    && Number.isFinite(value.count)
+}
+
+function isPendingApproval(value: unknown): value is PendingApproval {
+  if (!isRecord(value)) return false
+  return typeof value.id === 'string'
+    && typeof value.requestId === 'string'
+    && typeof value.at === 'string'
+    && typeof value.userName === 'string'
+    && typeof value.department === 'string'
+    && typeof value.reason === 'string'
+    && Array.isArray(value.detectionSummary) && value.detectionSummary.every(isDetectionCount)
+    && typeof value.maskedPreview === 'string'
+}
+
+function isAuditLogEntry(value: unknown): value is AuditLogEntry {
+  if (!isRecord(value)) return false
+  return typeof value.id === 'string'
+    && typeof value.at === 'string'
+    && typeof value.userName === 'string'
+    && typeof value.department === 'string'
+    && isGrade(value.grade)
+    && isRoute(value.route)
+    && Array.isArray(value.detectionCounts) && value.detectionCounts.every(isDetectionCount)
+    && (value.approvedBy === undefined || typeof value.approvedBy === 'string')
+}
+
+function isDemoAccount(value: unknown): value is DemoAccount {
+  return isSession(value) && typeof (value as DemoAccount).description === 'string'
+}
+
+function isRoleChange(value: unknown): value is RoleChangeEntry {
+  if (!isRecord(value)) return false
+  return typeof value.id === 'string'
+    && typeof value.at === 'string'
+    && typeof value.actorName === 'string'
+    && typeof value.targetName === 'string'
+    && (value.from === 'employee' || value.from === 'approver' || value.from === 'auditor')
+    && (value.to === 'employee' || value.to === 'approver' || value.to === 'auditor')
+}
+
+function isInspectionTuple(value: unknown): value is [string, InspectionResult] {
+  return Array.isArray(value)
+    && value.length === 2
+    && typeof value[0] === 'string'
+    && isInspection(value[1])
+    && value[0] === value[1].requestId
+}
+
+function isApprovalStatusTuple(value: unknown): value is [string, ApprovalStatus] {
+  return Array.isArray(value)
+    && value.length === 2
+    && typeof value[0] === 'string'
+    && isApprovalStatus(value[1])
+    && value[0] === value[1].requestId
+}
+
+function isInspectionOwnerTuple(value: unknown): value is [string, string | null] {
+  return Array.isArray(value)
+    && value.length === 2
+    && typeof value[0] === 'string'
+    && (typeof value[1] === 'string' || value[1] === null)
+}
+
+function isActiveInspectionTuple(value: unknown): value is [string | null, string] {
+  return Array.isArray(value)
+    && value.length === 2
+    && (typeof value[0] === 'string' || value[0] === null)
+    && typeof value[1] === 'string'
+}
+
+function isMockStateSnapshot(value: unknown): value is MockStateSnapshot {
+  if (!isRecord(value)) return false
+  if (value.version !== MOCK_STATE_VERSION
+    || typeof value.sequence !== 'number'
+    || !Number.isInteger(value.sequence)
+    || value.sequence < 0) return false
+
+  const storedInspections: unknown = value.inspections
+  const storedInspectionOwners: unknown = value.inspectionOwners
+  const storedActiveInspections: unknown = value.activeInspectionRequestIds
+  const storedStatuses: unknown = value.approvalStatuses
+  const storedPending: unknown = value.pendingApprovals
+  const storedAuditLogs: unknown = value.auditLogs
+  const storedAccounts: unknown = value.accounts
+  const storedRoleChanges: unknown = value.roleChanges
+  const storedReportKeys: unknown = value.falsePositiveReportKeys
+
+  if (!Array.isArray(storedInspections) || !storedInspections.every(isInspectionTuple)
+    || !Array.isArray(storedInspectionOwners)
+    || !storedInspectionOwners.every(isInspectionOwnerTuple)
+    || !Array.isArray(storedActiveInspections)
+    || !storedActiveInspections.every(isActiveInspectionTuple)
+    || !Array.isArray(storedStatuses) || !storedStatuses.every(isApprovalStatusTuple)
+    || !Array.isArray(storedPending) || !storedPending.every(isPendingApproval)
+    || !Array.isArray(storedAuditLogs) || !storedAuditLogs.every(isAuditLogEntry)
+    || !isRecord(value.dictionary)
+    || !Array.isArray(storedAccounts) || !storedAccounts.every(isDemoAccount)
+    || !Array.isArray(storedRoleChanges) || !storedRoleChanges.every(isRoleChange)
+    || !Array.isArray(storedReportKeys)
+    || !storedReportKeys.every((key) => typeof key === 'string')) return false
+
+  const statuses = new Map<string, ApprovalStatus>(storedStatuses)
+  const ownerRequestIds = new Set(storedInspectionOwners.map(([requestId]) => requestId))
+  const inspectionRequestIds = new Set(storedInspections.map(([requestId]) => requestId))
+  const owners = new Map(storedInspectionOwners)
+  const activeOwners = new Set(storedActiveInspections.map(([ownerUserId]) => ownerUserId))
+  return ownerRequestIds.size === storedInspectionOwners.length
+    && inspectionRequestIds.size === storedInspections.length
+    && ownerRequestIds.size === inspectionRequestIds.size
+    && [...ownerRequestIds].every((requestId) => inspectionRequestIds.has(requestId))
+    && activeOwners.size === storedActiveInspections.length
+    && storedActiveInspections.every(([ownerUserId, requestId]) => (
+      inspectionRequestIds.has(requestId) && owners.get(requestId) === ownerUserId
+    ))
+    && storedPending.every((approval) => {
+      const status = statuses.get(approval.requestId)
+      return status?.approvalId === approval.id && status.state === 'pending'
+    })
 }
 
 export async function listDemoAccounts(): Promise<DemoAccount[]> {
@@ -501,12 +721,57 @@ function buildInspection(
 }
 
 export async function inspect(text: string): Promise<InspectionResult> {
+  const ownerUserId = getStoredSession()?.userId ?? null
   const requestId = createId('req')
   const entries = getActiveDictionaryEntries()
   const elapsedMs = await waitForMock(standardDelay)
   const result = buildInspection(requestId, text, entries, elapsedMs)
   inspections.set(requestId, result)
+  inspectionOwners.set(requestId, ownerUserId)
+  activeInspectionRequestIds.set(ownerUserId, requestId)
+  persistMockState()
   return result
+}
+
+/** 새로고침 뒤 승인 왕복 화면이 같은 검사 카드를 복원하기 위한 목 조회다. */
+export async function getInspection(requestId: string): Promise<InspectionResult | null> {
+  await waitForMock(approvalStatusDelay)
+  const inspection = inspections.get(requestId)
+  const ownerUserId = inspectionOwners.get(requestId)
+  if (!inspection || ownerUserId === undefined) return null
+
+  // 같은 탭에서 계정을 바꿔도 앞 사용자의 원문을 복원하지 않는다.
+  const currentUserId = getStoredSession()?.userId ?? null
+  if (ownerUserId !== currentUserId) return null
+  return {
+    ...inspection,
+    detections: inspection.detections.map((detection) => ({ ...detection })),
+  }
+}
+
+/** 현재 로그인 사용자(또는 익명 사용자)가 마지막으로 검사한 결과만 복원한다. */
+export async function getActiveInspection(): Promise<InspectionResult | null> {
+  await waitForMock(approvalStatusDelay)
+  const currentUserId = getStoredSession()?.userId ?? null
+  const requestId = activeInspectionRequestIds.get(currentUserId)
+  if (!requestId || inspectionOwners.get(requestId) !== currentUserId) return null
+
+  const inspection = inspections.get(requestId)
+  if (!inspection) return null
+  return {
+    ...inspection,
+    detections: inspection.detections.map((detection) => ({ ...detection })),
+  }
+}
+
+/** 화면에서 검사 결과를 폐기할 때 현재 사용자의 활성 포인터만 지운다. */
+export function clearActiveInspection(requestId: string): void {
+  const currentUserId = getStoredSession()?.userId ?? null
+  if (inspectionOwners.get(requestId) !== currentUserId) return
+  if (activeInspectionRequestIds.get(currentUserId) !== requestId) return
+
+  activeInspectionRequestIds.delete(currentUserId)
+  persistMockState()
 }
 
 export class DictionaryValidationError extends Error {
@@ -643,6 +908,7 @@ export async function saveDictionary(input: {
   }
 
   commitDictionary(input.entries, session?.name ?? '보안 관리자')
+  persistMockState()
   const next = readDictionary()
   return { ...next, activeLimit: DICTIONARY_ACTIVE_LIMIT }
 }
@@ -664,6 +930,7 @@ export function getGradePolicy(): GradePolicyRow[] {
 
 export function resetMockDictionary(): void {
   resetDictionaryStore()
+  persistMockState()
 }
 
 function responseForGrade(grade: Grade): string {
@@ -706,6 +973,7 @@ export async function send(requestId: string): Promise<ChatMessage> {
       ...approvalStatus,
       consumedAt: new Date().toISOString(),
     })
+    persistMockState()
 
     if (approvalStatus.state === 'approved') {
       route = 'external_llm'
@@ -720,12 +988,18 @@ export async function send(requestId: string): Promise<ChatMessage> {
     route === 'internal_llm' ? internalDelay : standardDelay,
   )
 
-  return {
+  const response: ChatMessage = {
     id: createId('message'),
     role: 'assistant',
     text: responseText,
     route,
   }
+  const ownerUserId = inspectionOwners.get(requestId)
+  if (ownerUserId !== undefined && activeInspectionRequestIds.get(ownerUserId) === requestId) {
+    activeInspectionRequestIds.delete(ownerUserId)
+  }
+  persistMockState()
+  return response
 }
 
 function summarizeDetections(detections: Detection[]): { label: string; count: number }[] {
@@ -784,6 +1058,7 @@ export async function requestApproval(requestId: string): Promise<ApprovalReques
     state: 'pending',
     requestedAt,
   })
+  persistMockState()
 
   return { approvalId: approval.id, status: 'pending' }
 }
@@ -807,6 +1082,7 @@ export async function reportFalsePositive(
   }
 
   falsePositiveReportKeys.add(`${requestId}:${detectionId}`)
+  persistMockState()
   return { reported: true }
 }
 
@@ -874,7 +1150,7 @@ function makeAuditLogs(): AuditLogEntry[] {
   }).sort((first, second) => second.at.localeCompare(first.at))
 }
 
-const auditLogs = makeAuditLogs()
+let auditLogs = makeAuditLogs()
 const initialPendingApprovals: readonly PendingApproval[] = [
   {
     id: 'approval-001',
@@ -931,6 +1207,133 @@ for (const approval of pendingApprovals) {
     requestedAt: approval.at,
   })
 }
+
+function clonePendingApprovals(source: readonly PendingApproval[]): PendingApproval[] {
+  return source.map((approval) => ({
+    ...approval,
+    detectionSummary: approval.detectionSummary.map((item) => ({ ...item })),
+  }))
+}
+
+function cloneAuditLogs(source: readonly AuditLogEntry[]): AuditLogEntry[] {
+  return source.map((entry) => ({
+    ...entry,
+    detectionCounts: entry.detectionCounts.map((item) => ({ ...item })),
+  }))
+}
+
+function createMockStateSnapshot(): MockStateSnapshot {
+  return {
+    version: MOCK_STATE_VERSION,
+    sequence,
+    inspections: [...inspections].map(([requestId, inspection]) => [
+      requestId,
+      {
+        ...inspection,
+        detections: inspection.detections.map((detection) => ({ ...detection })),
+      },
+    ]),
+    inspectionOwners: [...inspectionOwners],
+    activeInspectionRequestIds: [...activeInspectionRequestIds],
+    approvalStatuses: [...approvalStatuses].map(([requestId, status]) => [
+      requestId,
+      { ...status },
+    ]),
+    pendingApprovals: clonePendingApprovals(pendingApprovals),
+    auditLogs: cloneAuditLogs(auditLogs),
+    dictionary: readDictionaryStoreState(),
+    accounts: accounts.map((account) => ({ ...account })),
+    roleChanges: roleChanges.map((change) => ({ ...change })),
+    falsePositiveReportKeys: [...falsePositiveReportKeys],
+  }
+}
+
+function serializedByteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength
+}
+
+/**
+ * 시연 전용 절충이다. 검사 결과에는 원문이 있으므로 운영 제품이라면 브라우저 저장소에 두면 안 된다.
+ * 여기서는 발표 중 새로고침을 견디기 위해 탭을 닫으면 사라지는 sessionStorage 한 곳에만 보관한다.
+ * 실제 백엔드 연동 시에는 서버가 상태를 소유하고 이 목 저장 경로를 제거해야 한다.
+ */
+function persistMockState(): void {
+  try {
+    const snapshot = createMockStateSnapshot()
+    let serialized = JSON.stringify(snapshot)
+
+    // 첨부 본문 때문에 원문과 마스킹본을 함께 가진 검사 결과가 가장 빨리 커진다.
+    // Map의 삽입 순서를 유지한 배열이므로 앞에서부터 빼면 오래된 검사 결과부터 버려진다.
+    while (
+      serializedByteLength(serialized) > MOCK_STATE_MAX_BYTES
+      && snapshot.inspections.length > 0
+    ) {
+      const removed = snapshot.inspections.shift()
+      if (removed) {
+        snapshot.inspectionOwners = snapshot.inspectionOwners.filter(
+          ([requestId]) => requestId !== removed[0],
+        )
+        snapshot.activeInspectionRequestIds = snapshot.activeInspectionRequestIds.filter(
+          ([, requestId]) => requestId !== removed[0],
+        )
+      }
+      serialized = JSON.stringify(snapshot)
+    }
+
+    // 검사 결과를 모두 덜어도 한도를 넘는 비정상 상태라면 마지막 정상 스냅숏을 보존한다.
+    if (serializedByteLength(serialized) > MOCK_STATE_MAX_BYTES) return
+    globalThis.sessionStorage.setItem(MOCK_STATE_STORAGE_KEY, serialized)
+  } catch {
+    // 프라이빗 모드, 저장 용량 초과, 저장소 차단에서는 메모리 상태만으로 계속 동작한다.
+  }
+}
+
+function restoreMockState(): void {
+  try {
+    const stored = globalThis.sessionStorage.getItem(MOCK_STATE_STORAGE_KEY)
+    if (!stored) return
+
+    const parsed: unknown = JSON.parse(stored)
+    if (!isMockStateSnapshot(parsed)) return
+    // 다른 필드를 건드리기 전에 사전 스냅숏까지 검증해 부분 복원을 막는다.
+    if (!restoreDictionaryStoreState(parsed.dictionary)) return
+
+    inspections.clear()
+    for (const [requestId, inspection] of parsed.inspections) {
+      inspections.set(requestId, {
+        ...inspection,
+        detections: inspection.detections.map((detection) => ({ ...detection })),
+      })
+    }
+
+    inspectionOwners.clear()
+    for (const [requestId, userId] of parsed.inspectionOwners) {
+      inspectionOwners.set(requestId, userId)
+    }
+
+    activeInspectionRequestIds.clear()
+    for (const [userId, requestId] of parsed.activeInspectionRequestIds) {
+      activeInspectionRequestIds.set(userId, requestId)
+    }
+
+    approvalStatuses.clear()
+    for (const [requestId, status] of parsed.approvalStatuses) {
+      approvalStatuses.set(requestId, { ...status })
+    }
+
+    pendingApprovals = clonePendingApprovals(parsed.pendingApprovals)
+    auditLogs = cloneAuditLogs(parsed.auditLogs)
+    accounts = parsed.accounts.map((account) => ({ ...account }))
+    roleChanges = parsed.roleChanges.map((change) => ({ ...change }))
+    falsePositiveReportKeys.clear()
+    for (const key of parsed.falsePositiveReportKeys) falsePositiveReportKeys.add(key)
+    sequence = parsed.sequence
+  } catch {
+    // 손상된 JSON이나 접근 오류에서는 씨앗 메모리 상태를 그대로 사용한다.
+  }
+}
+
+restoreMockState()
 
 function utcDateKey(daysAgo: number): string {
   const date = new Date()
@@ -1100,6 +1503,7 @@ export async function decideApproval(
     approvedBy: decidedBy,
   }
   auditLogs.unshift(auditEntry)
+  persistMockState()
 
   return { id, decision, status: 'decided' }
 }
@@ -1169,6 +1573,7 @@ export async function assignRole(userId: string, role: UserRole): Promise<Manage
     from,
     to: role,
   })
+  persistMockState()
   return toManagedUser(account, session)
 }
 
@@ -1179,7 +1584,45 @@ export async function listRoleChanges(limit = 5): Promise<RoleChangeEntry[]> {
   return roleChanges.slice(0, limit).map((change) => ({ ...change }))
 }
 
+/** 승인자만 쓰는 시연 초기화다. 로그인 세션은 유지하고 통합 목 상태 키만 지운다. */
+export async function resetDemoState(): Promise<void> {
+  const session = getStoredSession()
+  // 일반 목 API의 무세션 직접 호출 허용은 테스트 편의 계약일 뿐이다. 전체 데이터를 지우는
+  // 초기화는 예외로 두고, 실제 로그인한 승인자에게만 허용한다.
+  if (!session || !can(session.role, 'admin.demo.reset')) {
+    throw new Error('시연 데이터를 초기화할 권한이 없다.')
+  }
+  await waitForMock(standardDelay)
+
+  accounts = initialAccounts.map((account) => ({ ...account }))
+  roleChanges = []
+  sequence = 0
+  inspections.clear()
+  inspectionOwners.clear()
+  activeInspectionRequestIds.clear()
+  approvalStatuses.clear()
+  falsePositiveReportKeys.clear()
+  auditLogs = makeAuditLogs()
+  pendingApprovals = clonePendingApprovals(initialPendingApprovals)
+  for (const approval of pendingApprovals) {
+    approvalStatuses.set(approval.requestId, {
+      approvalId: approval.id,
+      requestId: approval.requestId,
+      state: 'pending',
+      requestedAt: approval.at,
+    })
+  }
+  resetDictionaryStore()
+
+  try {
+    globalThis.sessionStorage.removeItem(MOCK_STATE_STORAGE_KEY)
+  } catch {
+    // 저장소를 지울 수 없어도 현재 탭의 메모리 상태 초기화는 완료한다.
+  }
+}
+
 export function resetMockUsers(): void {
   accounts = initialAccounts.map((account) => ({ ...account }))
   roleChanges = []
+  persistMockState()
 }

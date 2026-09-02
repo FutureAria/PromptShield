@@ -337,4 +337,59 @@ describe('직원 화면 첨부 경로', () => {
 
     await getInspectionCard(/위험.*외부 전송을 차단했다/)
   })
+
+  it('완료 기준: 주민등록번호가 든 txt는 차단하고 승인 경로를 연다', async () => {
+    const user = makeUser()
+    render(<EmployeePage />)
+
+    await user.upload(
+      fileInput(),
+      textFile('주민등록번호 000000-0000000 확인해줘', '주민번호.txt'),
+    )
+    await screen.findByText('UTF-8')
+    await user.click(screen.getByRole('button', { name: '검사' }))
+
+    await getInspectionCard(/위험.*외부 전송을 차단했다/)
+    expect(screen.getByRole('button', { name: '전송 차단됨' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '관리자 승인 요청' })).toBeVisible()
+  })
+
+  it('완료 기준: 일반 본문과 거래처 csv를 함께 검사하면 전체가 기밀로 오른다', async () => {
+    const user = makeUser()
+    render(<EmployeePage />)
+
+    await user.type(
+      screen.getByRole('textbox', { name: 'AI에게 보낼 내용' }),
+      '회의록 요약 양식을 알려줘',
+    )
+    await user.upload(
+      fileInput(),
+      textFile('거래처,요청\nABC상사,견적 작성', '거래처.csv'),
+    )
+    await screen.findByText('UTF-8')
+    await user.click(screen.getByRole('button', { name: '검사' }))
+
+    await getInspectionCard(/기밀.*회사 기밀이 포함되어/)
+    expect(screen.getByText('처리 경로 · 사내 LLM')).toBeVisible()
+  })
+
+  it('D-23 승인 왕복 재마운트에서도 첨부 목록을 메모리에서 복원한다', async () => {
+    const user = makeUser()
+    render(<EmployeePage />)
+    const fileName = '승인대상.pdf'
+
+    await user.upload(fileInput(), pdfFile(fileName))
+    await screen.findByText(/판정 불가 — 이 형식은 내용을 확인할 수 없다/)
+    await user.click(screen.getByRole('button', { name: '검사' }))
+    await user.click(await screen.findByRole('button', { name: '관리자 승인 요청' }))
+    await screen.findByText('관리자 승인을 기다리는 중')
+
+    cleanup()
+    const { container } = render(<EmployeePage />)
+    await screen.findByText('관리자 승인을 기다리는 중')
+
+    const list = container.querySelector('.attachments')
+    expect(list).not.toBeNull()
+    expect(list).toHaveTextContent(fileName)
+  })
 })

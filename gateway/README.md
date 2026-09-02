@@ -1,5 +1,7 @@
 # gateway
 
-Nginx 설정. 프런트엔드 요청을 FastAPI 백엔드로 라우팅한다.
+Nginx 단일 진입점입니다. 호스트의 `http://localhost:8080`을 프런트엔드 컨테이너로 전달하고, `/api/` 요청은 향후 FastAPI 백엔드로 전달합니다.
 
-`nginx.conf`는 아직 작성 전이며, `docker-compose.yml`이 이 경로를 참조한다.
+기본 `docker compose up`에서는 백엔드를 띄우지 않습니다. Docker 내장 DNS와 변수형 `proxy_pass`로 백엔드 이름을 요청 시점에 해석하므로 nginx 자체는 정상 기동하며, 현재 `/api/` 요청만 `502 Bad Gateway`를 반환하는 것이 정상입니다.
+
+접근 로그에는 민감한 프롬프트가 쿼리 문자열을 통해 남지 않도록 쿼리 문자열을 제외한 URI만 기록합니다. 첨부 요청은 4MB까지 허용하고, 향후 내부 LLM 및 SSE 응답을 위해 긴 읽기 제한 시간과 비버퍼링 프록시를 사용합니다.

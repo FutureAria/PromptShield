@@ -330,8 +330,7 @@
   white-space: nowrap;
 }
 
-.attachment--unreadable .attachment__name,
-.attachment--unreadable .text-button {
+.attachment--unreadable .attachment__name {
   color: var(--blocked-fg);
 }
 
@@ -802,6 +801,16 @@
 .employee-page .text-button:hover:not(:disabled) {
   border-bottom-color: var(--ink);
   color: var(--ink);
+}
+
+.employee-page .attachment--unreadable .text-button,
+.employee-page .attachment--unreadable .text-button:hover:not(:disabled) {
+  border-bottom-color: var(--blocked-line);
+  color: var(--blocked-fg);
+}
+
+.employee-page .attachment--unreadable .text-button:focus-visible {
+  outline-color: var(--blocked-line);
 }
 
 .detections__reported {

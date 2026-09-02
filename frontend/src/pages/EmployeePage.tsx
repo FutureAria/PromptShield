@@ -8,6 +8,7 @@ import {
   composeInspectionInput,
   formatBytes,
   getApprovalStatus,
+  getInspection,
   getStoredSession,
   inspect,
   readAttachment,
@@ -51,8 +52,9 @@ interface ApprovalRoundTripContext {
   userId: string | null
 }
 
-// SPA 안에서 관리자 화면을 왕복할 때만 쓰는 메모리 컨텍스트다.
-// 원문이나 검사 결과를 sessionStorage 등 영속 저장소에 기록하지 않는다.
+// SPA 안에서 관리자 화면을 왕복할 때 첨부 이름까지 유지하는 메모리 컨텍스트다.
+// 시연 중 F5 복구를 위해 목 API는 검사 원문과 결과만 통합 sessionStorage에 보관한다.
+// 파일 이름과 원본 바이트는 저장하지 않으며, 운영 백엔드에서는 서버가 상태를 소유해야 한다.
 let approvalRoundTripContext: ApprovalRoundTripContext | null = null
 let attachmentSequence = 0
 
@@ -354,7 +356,10 @@ export default function EmployeePage() {
 
     async function restoreApproval() {
       try {
-        const status = await getApprovalStatus(requestId)
+        const [status, storedInspection] = await Promise.all([
+          getApprovalStatus(requestId),
+          getInspection(requestId),
+        ])
         if (!active) return
 
         if (!status) {
@@ -365,10 +370,22 @@ export default function EmployeePage() {
           return
         }
 
-        const context = approvalRoundTripContext
+        let context = approvalRoundTripContext
+        if ((!context || context.requestId !== requestId) && storedInspection) {
+          // 전체 새로고침에서는 파일 객체와 이름을 복원하지 않는다. 검사를 만들었던
+          // 사용자에게만 API가 돌려준 원문·결과로 승인 왕복의 핵심 흐름을 이어 간다.
+          context = {
+            requestId,
+            inspection: storedInspection,
+            draft: storedInspection.originalText,
+            attachments: [],
+            userId: getStoredSession()?.userId ?? null,
+          }
+          approvalRoundTripContext = context
+        }
+
         if (!context || context.requestId !== requestId) {
-          // ApprovalStatus에는 의도적으로 원문이 없으므로 검사 컨텍스트 없이
-          // 복원할 수 없다. 정상적인 새로고침에서는 목 상태도 함께 사라져 null이다.
+          // 저장소가 막혔거나 2MB 제한으로 이 검사가 제거됐다면 안전하게 초기화한다.
           clearPendingApprovalRequestId(requestId)
           return
         }
@@ -543,7 +560,7 @@ export default function EmployeePage() {
       ...readingAttachments.map(({ attachment }) => attachment),
     ])
     setAttachmentNotice(
-      notice || `파일 ${readingAttachments.length}개를 첨부했다. 내용을 읽고 있다.`,
+      notice || `파일 ${readingAttachments.length}개를 첨부했다.`,
     )
 
     readingAttachments.forEach(({ attachment, file }) => {

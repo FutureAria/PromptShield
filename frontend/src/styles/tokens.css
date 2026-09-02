@@ -17,6 +17,7 @@
 
   --radius: 6px;
   --radius-sm: 4px;
-  --font-ui: 'Pretendard Variable', Pretendard, -apple-system, system-ui, sans-serif;
+  --font-ui: 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont,
+    'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', system-ui, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
 }

@@ -3,6 +3,7 @@ import type { UserRole } from './types'
 export type Capability =
   | 'employee.inspect'          // 직원 화면에서 검사하고 전송한다
   | 'admin.dashboard.view'      // 관리 현황을 본다
+  | 'admin.demo.reset'          // 시연용 목 데이터를 씨앗 값으로 되돌린다
   | 'admin.logs.view'           // 감사 로그를 조회한다
   | 'admin.approvals.view'      // 승인 대기 목록을 본다
   | 'admin.approvals.decide'    // 승인·조건부 승인·반려를 처리한다
@@ -18,6 +19,7 @@ export type Capability =
 const CAPABILITY_MATRIX: Record<Capability, Record<UserRole, boolean>> = {
   'employee.inspect':       { employee: true,  approver: true,  auditor: true  },
   'admin.dashboard.view':   { employee: false, approver: true,  auditor: true  },
+  'admin.demo.reset':       { employee: false, approver: true,  auditor: false },
   'admin.logs.view':        { employee: false, approver: true,  auditor: true  },
   'admin.approvals.view':   { employee: false, approver: true,  auditor: true  },
   'admin.approvals.decide': { employee: false, approver: true,  auditor: false },
@@ -39,6 +41,7 @@ export const ROLE_LABELS: Record<UserRole, string> = {
 export const CAPABILITY_ORDER: readonly Capability[] = [
   'employee.inspect',
   'admin.dashboard.view',
+  'admin.demo.reset',
   'admin.logs.view',
   'admin.approvals.view',
   'admin.approvals.decide',
@@ -51,6 +54,7 @@ export const CAPABILITY_ORDER: readonly Capability[] = [
 export const CAPABILITY_LABELS: Record<Capability, string> = {
   'employee.inspect': '직원 화면에서 검사하고 전송한다',
   'admin.dashboard.view': '관리 현황을 본다',
+  'admin.demo.reset': '시연용 목 데이터를 초기화한다',
   'admin.logs.view': '감사 로그를 조회한다',
   'admin.approvals.view': '승인 대기 목록을 본다',
   'admin.approvals.decide': '승인·조건부 승인·반려를 처리한다',

@@ -1,10 +1,19 @@
+# The default stack intentionally starts only the demo-ready frontend and gateway.
+# backend/ has no application source yet, so attempting to build it currently fails.
+# db and ollama are also unused; Ollama may download several GB of model data.
+# Start those future services explicitly with: docker compose --profile full up
 services:
   frontend:
-    build: ./frontend
-    ports:
-      - "3000:3000"
-    depends_on:
-      - gateway
+    build:
+      context: ./frontend
+    expose:
+      - "80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
 
   gateway:
     image: nginx:alpine
@@ -13,26 +22,34 @@ services:
     ports:
       - "8080:80"
     depends_on:
-      - backend
+      frontend:
+        condition: service_healthy
 
+  # The full profile is reserved for the backend implementation in progress.
+  # Keeping all three services behind the profile prevents the missing backend
+  # Dockerfile and currently-unused database/LLM from breaking the demo stack.
   backend:
-    build: ./backend
+    profiles: ["full"]
+    build:
+      context: ./backend
     environment:
-      - DATABASE_URL=postgresql://promptshield:promptshield@db:5432/promptshield
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-promptshield}:${POSTGRES_PASSWORD:-promptshield}@db:5432/${POSTGRES_DB:-promptshield}"
     depends_on:
       - db
       - ollama
 
   db:
+    profiles: ["full"]
     image: postgres:16-alpine
     environment:
-      - POSTGRES_USER=promptshield
-      - POSTGRES_PASSWORD=promptshield
-      - POSTGRES_DB=promptshield
+      POSTGRES_USER: ${POSTGRES_USER:-promptshield}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-promptshield}
+      POSTGRES_DB: ${POSTGRES_DB:-promptshield}
     volumes:
       - db_data:/var/lib/postgresql/data
 
   ollama:
+    profiles: ["full"]
     image: ollama/ollama:latest
     volumes:
       - ollama_data:/root/.ollama

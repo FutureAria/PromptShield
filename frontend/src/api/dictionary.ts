@@ -12,6 +12,13 @@ export const DICTIONARY_ACTIVE_LIMIT = 300
 export const DICTIONARY_PASTE_ROW_LIMIT = 200
 export const DICTIONARY_PRIORITY = 3
 
+export interface DictionaryStoreState {
+  revision: number
+  updatedAt: string
+  entries: DictionaryEntry[]
+  sequence: number
+}
+
 export interface DictionaryPreset {
   typeLabel: string          // 표의 유형 select 에 보이는 한글
   detectionType: DetectionType
@@ -50,6 +57,53 @@ let entries: DictionaryEntry[] = seedEntries.map((entry) => ({ ...entry }))
 let revision = 1
 let updatedAt = SEED_UPDATED_AT
 let dictSequence = 0
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function isDictionaryEntry(value: unknown): value is DictionaryEntry {
+  if (!isRecord(value)) return false
+
+  return typeof value.id === 'string'
+    && typeof value.term === 'string'
+    && (value.entryType === 'partner'
+      || value.entryType === 'product_code'
+      || value.entryType === 'price_expression'
+      || value.entryType === 'other')
+    && (value.grade === 'caution' || value.grade === 'confidential')
+    && typeof value.active === 'boolean'
+    && typeof value.note === 'string'
+    && typeof value.updatedAt === 'string'
+    && typeof value.updatedBy === 'string'
+}
+
+/** 단일 목 상태 스냅숏에 넣을 사전 내부 상태를 복제한다. */
+export function readDictionaryStoreState(): DictionaryStoreState {
+  return {
+    revision,
+    updatedAt,
+    entries: entries.map((entry) => ({ ...entry })),
+    sequence: dictSequence,
+  }
+}
+
+/** sessionStorage에서 읽은 값을 검증한 뒤에만 사전 상태 전체를 교체한다. */
+export function restoreDictionaryStoreState(value: unknown): boolean {
+  if (!isRecord(value)
+    || !Number.isInteger(value.revision) || (value.revision as number) < 1
+    || typeof value.updatedAt !== 'string'
+    || !Array.isArray(value.entries) || !value.entries.every(isDictionaryEntry)
+    || !Number.isInteger(value.sequence) || (value.sequence as number) < 0) {
+    return false
+  }
+
+  revision = value.revision as number
+  updatedAt = value.updatedAt
+  entries = value.entries.map((entry) => ({ ...entry }))
+  dictSequence = value.sequence as number
+  return true
+}
 
 export function readDictionary(): { revision: number; updatedAt: string; entries: DictionaryEntry[] } {
   return { revision, updatedAt, entries: entries.map((entry) => ({ ...entry })) }
