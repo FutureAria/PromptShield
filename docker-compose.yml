@@ -1,7 +1,17 @@
-# The default stack intentionally starts only the demo-ready frontend and gateway.
-# backend/ has no application source yet, so attempting to build it currently fails.
-# db and ollama are also unused; Ollama may download several GB of model data.
-# Start those future services explicitly with: docker compose --profile full up
+# 기본 구성(docker compose up)은 화면·게이트웨이·백엔드·데이터베이스를 함께 띄운다.
+# 프런트엔드는 기동할 때 /api/health 를 확인해, 백엔드가 있으면 실제 게이트웨이를 쓰고
+# 없으면 목 구현으로 떨어진다. 그래서 백엔드가 빠져도 화면 시연은 끊기지 않는다.
+#
+# Ollama 는 모델을 수 GB 내려받으므로 기본 구성에서 뺐다. 사내 LLM까지 실제로 돌리려면
+#   docker compose --profile llm up
+# 로 함께 띄우고, 컨테이너 안에서 모델을 한 번 받는다.
+#   docker compose exec ollama ollama pull qwen2.5:3b
+# Ollama 가 없으면 기밀 등급 요청은 "사내 LLM에 연결하지 못했다"는 안내를 표시한다.
+# 이때도 그 요청이 외부로 나가지 않는다는 성질은 그대로 유지된다.
+# 프로젝트 이름을 고정한다. 저장소 폴더 이름이 한글이거나 공백을 포함하면
+# Compose 가 이름을 만들어 내지 못해 "project name must not be empty" 로 멈춘다.
+name: promptshield
+
 services:
   frontend:
     build:
@@ -20,26 +30,33 @@ services:
     volumes:
       - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
     ports:
-      - "8080:80"
+      # 호스트 8080 이 이미 쓰이고 있으면 GATEWAY_PORT 로 바꾼다.
+      #   GATEWAY_PORT=8090 docker compose up
+      - "${GATEWAY_PORT:-8080}:80"
     depends_on:
       frontend:
         condition: service_healthy
+      backend:
+        condition: service_healthy
 
-  # The full profile is reserved for the backend implementation in progress.
-  # Keeping all three services behind the profile prevents the missing backend
-  # Dockerfile and currently-unused database/LLM from breaking the demo stack.
   backend:
-    profiles: ["full"]
     build:
       context: ./backend
     environment:
-      DATABASE_URL: "postgresql://${POSTGRES_USER:-promptshield}:${POSTGRES_PASSWORD:-promptshield}@db:5432/${POSTGRES_DB:-promptshield}"
+      DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER:-promptshield}:${POSTGRES_PASSWORD:-promptshield}@db:5432/${POSTGRES_DB:-promptshield}"
+      OLLAMA_BASE_URL: "http://ollama:11434"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-qwen2.5:3b}"
+      # 외부 LLM 은 기본적으로 꺼 둔다. 지정되지 않은 원격 주소로 사내 데이터가
+      # 나가는 것을 기본 동작으로 두지 않는다.
+      EXTERNAL_LLM_ENABLED: "${EXTERNAL_LLM_ENABLED:-0}"
+      SEED_DEMO_DATA: "1"
+    expose:
+      - "8000"
     depends_on:
-      - db
-      - ollama
+      db:
+        condition: service_healthy
 
   db:
-    profiles: ["full"]
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-promptshield}
@@ -47,9 +64,15 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-promptshield}
     volumes:
       - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-promptshield} -d ${POSTGRES_DB:-promptshield}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
 
   ollama:
-    profiles: ["full"]
+    profiles: ["llm"]
     image: ollama/ollama:latest
     volumes:
       - ollama_data:/root/.ollama

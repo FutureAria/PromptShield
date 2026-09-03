@@ -12,12 +12,16 @@ docker compose up
 
 처음 실행은 프론트엔드 이미지를 빌드합니다. 소스 변경 뒤 강제로 다시 빌드하려면 `docker compose up --build`를 사용합니다. 기동하면 [http://localhost:8080](http://localhost:8080)으로 접속합니다. 호스트에 공개되는 포트는 게이트웨이의 `8080` 하나뿐입니다.
 
-기본 프로필은 다음 두 서비스만 기동합니다.
+기본 구성은 다음 네 서비스를 기동합니다.
 
-- `gateway`: Nginx 단일 진입점. `/`를 프론트엔드로 전달합니다.
-- `frontend`: React 프로덕션 빌드를 Nginx로 제공하며 호스트 포트를 열지 않습니다.
+- `gateway`: Nginx 단일 진입점. `/`는 화면으로, `/api/`는 백엔드로 전달합니다.
+- `frontend`: React 프로덕션 빌드. 호스트 포트를 열지 않습니다.
+- `backend`: FastAPI 게이트웨이. 탐지·등급 판정·마스킹·승인·감사를 담당합니다.
+- `db`: PostgreSQL 16. 정책·사전·승인·감사 로그를 저장합니다.
 
-화면은 목 API로 자체 완결되므로 백엔드 없이 모든 시나리오가 동작합니다. `/api/`에 직접 요청하면 `502 Bad Gateway`가 나오는 것이 현재의 정상 상태입니다. 게이트웨이는 Docker DNS로 백엔드를 지연 해석하므로 `backend` 컨테이너가 없어도 Nginx 자체는 정상 기동합니다.
+호스트 8080이 이미 쓰이고 있으면 `GATEWAY_PORT=8090 docker compose up` 으로 바꿉니다.
+
+화면은 기동할 때 `/api/health` 를 한 번 확인합니다. 백엔드가 있으면 실제 게이트웨이를 쓰고, 없으면 목 API로 떨어져 그대로 시연할 수 있습니다. 그래서 백엔드를 빼고 프런트만 띄워도 화면 시연이 끊기지 않습니다.
 
 ### 향후 전체 프로필
 
@@ -69,7 +73,9 @@ docker compose --profile full up --build
 
 ## 현재 한계
 
-- FastAPI 백엔드, PostgreSQL 저장, Ollama 내부 LLM은 아직 구현되지 않았습니다. 화면의 응답·승인·감사 흐름은 목 API입니다.
+- Ollama 사내 LLM은 모델이 수 GB라 기본 구성에서 뺐습니다. `docker compose --profile llm up` 으로 함께 띄우고 모델을 한 번 받아야 실제로 답변합니다. 없으면 기밀 등급 요청에 "사내 LLM에 연결하지 못했다"는 안내가 표시되며, 그 요청이 외부로 나가지 않는다는 성질은 유지됩니다.
+- 답변 재검사(외부 LLM 응답에 민감정보가 되돌아오는 경우)는 아직 구현하지 않았습니다.
+- 한국어 개체명 인식(NER)과 문맥 분류는 조사 단계이며, 현재 탐지는 규칙과 기업 사전 기반입니다.
 - PDF와 이미지, Office/HWP 문서의 내용은 검사하지 않습니다. 읽을 수 없는 첨부는 `판정 불가`로 표시하고 위험 등급으로 차단합니다.
 - 프론트엔드 역할 가드는 시연 UX이지 보안 경계가 아닙니다. 실제 인증·권한 판정은 서버에서 강제해야 합니다.
 
@@ -81,6 +87,11 @@ npm ci
 npx tsc --noEmit
 npm run build
 npm test
+
+cd ../backend
+python -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest tests/ -q    # 42개
 
 cd ..
 docker compose config
