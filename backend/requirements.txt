@@ -1,0 +1,8 @@
+# 로컬 개발(Python 3.13+)과 Docker 이미지(Python 3.12) 양쪽에서 설치되도록
+# 정확한 고정 대신 하한만 둔다. 배포 재현성이 필요하면 lock 파일을 별도로 만든다.
+fastapi>=0.115.6
+uvicorn[standard]>=0.34.0
+sqlalchemy>=2.0.36
+psycopg[binary]>=3.2.10
+pydantic>=2.10.4
+httpx>=0.28.1
