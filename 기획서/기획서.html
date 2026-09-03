@@ -144,6 +144,21 @@ td strong{font-weight:600}
 code{font-family:var(--mono);font-size:.88em;background:var(--rule-soft);
   padding:1px 5px;border-radius:2px;color:var(--ink-soft)}
 
+/* ── 실제 동작 예시 ── */
+.demo{border:1px solid var(--rule);border-radius:2px;background:var(--raised);
+  margin:0 0 20px;overflow:hidden}
+.demo .row{display:grid;grid-template-columns:76px minmax(0,1fr);gap:12px;
+  padding:10px 14px;border-bottom:1px solid var(--rule-soft);align-items:baseline}
+.demo .row:last-child{border-bottom:0}
+.demo dt{font-family:var(--mono);font-size:10px;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--muted);margin:0}
+.demo dd{margin:0;font-family:var(--mono);font-size:12.5px;line-height:1.55;
+  color:var(--ink);word-break:break-word}
+.demo .out dd{color:var(--g-caution)}
+.demo .verdict dd{font-family:var(--sans);font-size:13px}
+.demo .cap{padding:10px 14px;background:var(--paper);font-size:12.5px;
+  line-height:1.55;color:var(--ink-soft);border-top:1px solid var(--rule)}
+
 /* ── 담당자 표시 ── */
 .owner{display:inline-block;font-family:var(--mono);font-size:10px;font-weight:500;
   letter-spacing:.06em;color:var(--accent);background:var(--accent-soft);
@@ -170,8 +185,8 @@ h3 .owner{font-size:9.5px}
     --rule:#c4ccd2;--rule-soft:#e2e7ea;--accent:#1B4965;--accent-soft:#eef3f7;
     --g-normal:#2F6B4F;--g-caution:#8a5c00;--g-conf:#1B4965;--g-block:#A82D22;
     --g-normal-bg:#EAF3EE;--g-caution-bg:#FAF1DF;--g-conf-bg:#E7EFF4;--g-block-bg:#F9EAE8}
-  @page{size:A4;margin:16mm 15mm}
-  body{font-size:9.6pt;line-height:1.62;background:#fff}
+  @page{size:A4;margin:14mm 14mm}
+  body{font-size:9.15pt;line-height:1.55;background:#fff}
   .wrap{max-width:none;padding:0}
   .hint{display:none}
   .masthead{padding:0 0 9pt;border-bottom-width:1.2pt}
@@ -182,17 +197,17 @@ h3 .owner{font-size:9.5px}
   /* 절마다 페이지를 강제로 끊지 않는다. 한 절이 페이지를 조금 넘길 때
      남은 공간이 통째로 비어 분량이 부풀기 때문이다. 대신 표·목록 같은
      덩어리만 쪼개지지 않게 하고, 제목이 페이지 끝에 혼자 남지 않게 한다. */
-  .sheet{padding:11pt 0 0;border-bottom:0;break-after:auto;break-inside:auto}
+  .sheet{padding:9pt 0 0;border-bottom:0;break-after:auto;break-inside:auto}
   .sheet-head{margin:0 0 8pt;break-after:avoid}
   .sheet-head h2{font-size:15pt}
   .sheet-num{padding-top:4pt;font-size:8pt}
   .body > .col{max-width:none}
-  h3{font-size:10.6pt;margin:12pt 0 4pt;break-after:avoid}
-  p{margin:0 0 6.5pt}
+  h3{font-size:10.1pt;margin:10pt 0 3.5pt;break-after:avoid}
+  p{margin:0 0 5.5pt}
   ol,ul{margin:0 0 6pt;padding-left:14pt}
   li{margin:0 0 2.5pt}
-  table{font-size:8.5pt;min-width:0}
-  th,td{padding:4.2pt 6pt;line-height:1.5}
+  table{font-size:8.1pt;min-width:0}
+  th,td{padding:3.6pt 5.5pt;line-height:1.45}
   .tw{margin:0 0 8pt}
   .tw,.flow,.checks,.stack,.repo,.note{break-inside:avoid}
   .flow{padding:9pt 11pt;margin:0 0 9pt}
@@ -201,6 +216,12 @@ h3 .owner{font-size:9.5px}
   .step .t em{font-size:7.6pt}
   .branch{gap:5pt;margin:6pt 0 2pt 24pt}
   .branch div{font-size:8.2pt;padding:5pt 8pt;line-height:1.4}
+  .demo{margin:0 0 8pt;break-inside:avoid}
+  .demo .row{padding:4pt 7pt;grid-template-columns:52pt 1fr;gap:8pt}
+  .demo dt{font-size:7pt}
+  .demo dd{font-size:8pt;line-height:1.45}
+  .demo .verdict dd{font-size:8.2pt}
+  .demo .cap{padding:4.5pt 7pt;font-size:8pt;line-height:1.45}
   .crit{margin:0 0 8pt}
   .crit li{font-size:8pt;padding:3.4pt 7pt;line-height:1.45;grid-template-columns:16pt 1fr;gap:6pt}
   .crit li i{font-size:7.4pt}
@@ -250,10 +271,10 @@ h3 .owner{font-size:9.5px}
 
   <h3>무엇이 문제인가</h3>
   <p>직원이 생성형 AI에 업무 내용을 붙여넣는 순간, 그 내용은 외부 사업자의 서버로 넘어간다. 견적서를 요약해 달라고 하면 거래처명과 단가가, 안내문을 써 달라고 하면 고객의 이름과 연락처가 함께 나간다. 문제는 <strong>직원이 그것을 유출이라고 인식하지 못한다</strong>는 점이다. 업무를 빨리 끝내려는 정상적인 행동이 그대로 유출 경로가 된다.</p>
-  <p>규정으로는 막기 어렵다. “생성형 AI 사용 금지”라는 공지는 두 가지 결과만 낳는다. 직원이 규정을 어기고 몰래 쓰거나, 규정을 지키느라 생산성을 포기하거나.</p>
+  <p>규정으로는 막기 어렵다. “생성형 AI 사용 금지”라는 공지는 직원이 몰래 쓰거나, 생산성을 포기하거나 둘 중 하나로 끝난다.</p>
 
   <h3>대상 사용자 — 왜 지역 중소기업인가</h3>
-  <p>대기업은 이미 답을 갖고 있다. 사내 전용 AI 환경을 구축하거나, 정보유출방지(DLP) 솔루션을 도입하거나, 법무·보안 인력이 사용 지침을 관리한다. 이 셋 다 <strong>비용과 전담 인력</strong>을 전제한다.</p>
+  <p>대기업은 이미 답을 갖고 있다. 사내 전용 AI 환경, 정보유출방지(DLP) 솔루션, 사용 지침을 관리하는 법무·보안 인력. 이 셋 다 <strong>비용과 전담 인력</strong>을 전제한다.</p>
   <p>지역 중소기업에는 그 전제가 없다. 정보보안 전담자가 없고, 연 단위 라이선스 비용을 감당하기 어렵고, 도입하더라도 운영할 사람이 없다. 그러면서도 직원들은 이미 생성형 AI를 쓰고 있다. <strong>위험은 대기업과 같은데 대응 수단만 없는 상태</strong>가 지금의 지역 중소기업이다.</p>
 
   <div class="note">PromptShield는 “AI를 쓰지 말라”가 아니라 <strong>“위험한 부분만 걸러내고 나머지는 그대로 쓰게 하자”</strong>는 접근이다. 직원의 업무 흐름을 끊지 않으면서, 나가면 안 되는 것만 나가지 않게 한다.</div>
@@ -294,6 +315,15 @@ h3 .owner{font-size:9.5px}
   </table></div>
 
   <p>등급 결정 원칙은 <strong>“가장 높은 등급이 이긴다”</strong>이다. 한 문장에 이메일(주의)과 주민등록번호(위험)가 섞여 있으면 위험으로 판정한다. 낮은 등급이 높은 등급을 덮어쓰지 못하게 하는 것이 이 시스템의 안전 설계 핵심이다.</p>
+  <h3>실제로 무슨 일이 일어나는가</h3>
+  <p>주의 등급 요청 하나를 예로 들면 이렇다.</p>
+  <div class="demo">
+    <dl class="row"><dt>직원 입력</dt><dd>홍길동 010-0000-0000 hong@example.com 으로 안내문 보내줘</dd></dl>
+    <dl class="row verdict"><dt>판정</dt><dd><span class="chip c-caution">주의</span> &nbsp;마스킹 후 전달 · 탐지 3건(이름 · 전화번호 · 이메일)</dd></dl>
+    <dl class="row out"><dt>전송본</dt><dd>[이름1] [전화1] [이메일1] 으로 안내문 보내줘</dd></dl>
+    <p class="cap">외부 LLM은 전송본만 받는다. 직원은 안내문 초안을 그대로 받아 쓰고, 이름 · 연락처의 실제 값은 회사 밖으로 나가지 않는다. 직원이 따로 지우거나 판단할 일이 없다는 점이 중요하다.</p>
+  </div>
+
   <p>같은 원칙에서 <strong>내용을 읽지 못한 첨부는 ‘일반’이 아니라 ‘위험’이다.</strong> PDF나 이미지처럼 검사기가 내용을 확인할 수 없는 파일은 “안전함이 확인되지 않았다”는 뜻이므로 차단한다. 판정 불가가 통과되는 경로를 구조적으로 없앴다.</p>
 
   <h3>시스템 처리 흐름</h3>
@@ -315,8 +345,7 @@ h3 .owner{font-size:9.5px}
   </div>
 
   <h3>승인 예외 처리</h3>
-  <p>위험 등급이라도 업무상 꼭 보내야 할 때가 있다. 직원은 관리자 승인을 요청할 수 있고, 관리자는 셋 중 하나로 답한다. <strong>승인</strong>은 원문 그대로 전송을 허용하고, <strong>조건부 승인</strong>은 마스킹본으로만 전송을 허용하며, <strong>반려</strong>는 사유를 적어 거부한다.</p>
-  <p><strong>승인은 1회용이다.</strong> 한 번 전송에 쓴 승인으로 같은 요청을 다시 보낼 수 없다. 승인 하나로 반복 전송하는 우회를 막기 위해서다.</p>
+  <p>위험 등급이라도 업무상 꼭 보내야 할 때가 있다. 직원은 관리자 승인을 요청할 수 있고, 관리자는 셋 중 하나로 답한다. <strong>승인</strong>은 원문 그대로, <strong>조건부 승인</strong>은 마스킹본으로만 전송을 허용하며, <strong>반려</strong>는 사유를 적어 거부한다. <strong>승인은 1회용이라</strong> 한 번 전송에 쓴 승인으로 같은 요청을 다시 보낼 수 없다. 승인 하나로 반복 전송하는 우회를 막기 위해서다.</p>
 
   </div></div>
 </section>
@@ -348,11 +377,11 @@ h3 .owner{font-size:9.5px}
 
   <h3>내부 LLM (Ollama) <span class="owner">이서연</span></h3>
   <p>기밀 등급을 “차단”이 아니라 “사내 처리”로 흘려보내려면 외부에 나가지 않는 모델이 필요하다. Ollama는 사내 서버에서 오픈소스 모델을 구동하므로 <strong>입력이 회사 밖으로 나가지 않는다.</strong> 보안 도구를 쓰기 위해 데이터를 외부에 맡기는 모순을 없앤다.</p>
-  <p>모델 후보는 세 기준으로 고른다. 한국어 처리 품질, 중소기업이 갖춘 하드웨어에서 돌아가는 크기, 상업적 이용이 가능한 라이선스다. 내부·외부 LLM은 <strong>응답 품질·처리 시간·데이터 이동 범위</strong>로 비교해 등급별 분기 기준을 정한다.</p>
+  <p>모델 후보는 한국어 처리 품질, 중소기업 하드웨어에서 돌아가는 크기, 상업적 이용이 가능한 라이선스 세 기준으로 고른다. 내부·외부 LLM은 <strong>응답 품질·처리 시간·데이터 이동 범위</strong>로 비교해 등급별 분기 기준을 정한다.</p>
 
   <h3>보안정책과 데이터베이스 <span class="owner">홍재창</span></h3>
   <p>정책은 허용 · 마스킹 · 내부처리 · 차단 네 갈래이며, 2쪽의 4등급과 일대일로 대응한다. 권한은 <strong>직원 · 승인자 · 감사자</strong> 세 역할로 나눈다. 감사자에게 조회 권한은 주되 승인 권한은 주지 않아 직무를 분리한다.</p>
-  <p>PostgreSQL에는 계정과 권한, 검사 결과, 승인 이력, 감사 로그, 기업 사전, 역할 변경 기록을 저장한다. <strong>감사 로그에는 원문도 탐지된 값도 넣지 않고 등급 · 처리 경로 · 유형별 건수만 남긴다.</strong> 관리 화면이 새 유출 경로가 되면 안 되기 때문이며, 개인정보 최소 수집 원칙과도 같은 방향이다. 접속기록은 법정 보존 기간에 맞춰 보관한다.</p>
+  <p>PostgreSQL에는 계정과 권한, 검사 결과, 승인 이력, 감사 로그, 기업 사전, 역할 변경 기록을 저장한다. <strong>감사 로그에는 원문도 탐지된 값도 넣지 않고 등급·처리 경로·유형별 건수만 남기며</strong>, 접속기록은 법정 보존 기간에 맞춰 보관한다. 개인정보 최소 수집 원칙과 같은 방향이다.</p>
 
   </div></div>
 </section>
@@ -376,7 +405,7 @@ h3 .owner{font-size:9.5px}
       <tr><td>로그인</td><td>전체</td><td>계정과 역할을 확인한다</td></tr>
     </tbody>
   </table></div>
-  <p>검증은 등급별 시나리오로 한다. 민감정보가 없는 요청, 이름·연락처가 섞인 요청, 거래처·단가가 든 요청, 주민등록번호가 든 요청을 각각 넣어 <strong>의도한 경로로 갈라지는지</strong> 확인한다. 여기에 승인 왕복, 기업 사전 반영, 역할별 접근 거부를 더해 시연 순서를 구성했다.</p>
+  <p>검증은 등급별 시나리오로 한다. 민감정보가 없는 요청, 이름·연락처가 섞인 요청, 거래처·단가가 든 요청, 주민등록번호가 든 요청을 각각 넣어 <strong>의도한 경로로 갈라지는지</strong> 확인하고, 승인 왕복과 기업 사전 반영, 역할별 접근 거부를 더해 시연 순서를 구성했다.</p>
 
   <h3>역할 분담</h3>
   <p>각 팀원은 담당 분야의 <strong>기술 조사 → 근거 · 출처 정리 → 담당 문단 작성 → 팀 검토</strong>를 맡았다.</p>
@@ -419,11 +448,12 @@ h3 .owner{font-size:9.5px}
   <div class="body"><div></div><div class="col">
 
   <h3>기존 방식과 무엇이 다른가</h3>
+  <p>민감정보 탐지 도구도, 여러 모델로 요청을 나눠 보내는 LLM 게이트웨이도 이미 있다. PromptShield가 다른 점은 그 둘을 <strong>하나의 등급 판정으로 묶었다</strong>는 데 있다.</p>
   <ol>
-    <li><strong>차단이 아니라 경로 선택이다.</strong> 기존 도구는 통과 · 마스킹 · 차단 셋 중 하나를 고른다. 차단하면 업무가 멈추고 통과시키면 유출된다. 네 번째 선택지로 ‘사내 LLM 처리’를 넣어, 보안과 업무 연속성 중 하나를 포기하지 않게 했다.</li>
-    <li><strong>회사마다 다른 ‘민감함’을 관리자가 직접 정의한다.</strong> 범용 도구는 주민등록번호는 알아도 특정 거래처명이 왜 민감한지는 모른다. 기업 사전을 관리 화면에 두고, 저장 전에 정상 업무 문장에 잘못 걸리는지 미리 보여 준다.</li>
-    <li><strong>관리 화면이 새 유출 경로가 되지 않게 설계했다.</strong> 감사 로그에 유형과 건수만 남기고, 승인 화면에도 마스킹본만 넘긴다. 감사자와 승인자의 직무를 분리했다.</li>
-    <li><strong>설치와 운영 부담이 낮다.</strong> 전담 보안 인력을 전제하지 않는다. 사내 서버에 설치하는 형태이므로 검사 대상 데이터가 회사 밖으로 나가지 않는다.</li>
+    <li><strong>탐지 결과가 곧 전송 경로다.</strong> 탐지 도구는 무엇이 민감한지 알려 주지만 어디로 보낼지는 정하지 않고, 게이트웨이는 경로를 나누지만 민감도를 모른다. PromptShield는 하나의 등급이 두 결정을 동시에 내린다. 판정과 처리 사이에 사람의 판단이 끼어들 자리를 없앤 것이다.</li>
+    <li><strong>회사마다 다른 ‘민감함’을 관리자가 직접 정의한다.</strong> 범용 도구는 주민등록번호는 알아도 특정 거래처명이 왜 민감한지는 모른다. 기업 사전을 관리 화면에 두고, <strong>저장하기 전에 정상 업무 문장에 잘못 걸리는지 미리 보여 준다.</strong> 사전을 넓히다가 업무가 막히는 일을 방지한다.</li>
+    <li><strong>관리 화면이 새 유출 경로가 되지 않게 설계했다.</strong> 민감정보 도구가 관리자 화면에 원문을 모아 보여 주면 유출 지점이 여러 곳에서 한 곳으로 옮겨갔을 뿐이다. 감사 로그에는 유형과 건수만, 승인 화면에는 마스킹본만 넘기고, 감사자와 승인자의 직무를 분리했다.</li>
+    <li><strong>전담 인력이 없는 조직을 전제로 만들었다.</strong> 사내 서버 한 대에 설치해 쓰는 형태이므로 검사 대상 데이터가 회사 밖으로 나가지 않는다. 보안 도구를 쓰기 위해 데이터를 외부에 맡기는 모순이 없고, 구독 비용도 들지 않는다.</li>
   </ol>
 
   <h3>기대효과</h3>
@@ -438,7 +468,7 @@ h3 .owner{font-size:9.5px}
   </table></div>
 
   <h3>평가 항목</h3>
-  <p>실제 결과값이 아니라 개발 단계에서 측정할 항목이다.</p>
+  <p>실제 결과값이 아니라 개발 단계에서 측정할 항목이다. 실제 업무 문장으로 만든 시험 세트로 재고, 오탐률이 높게 나오면 기업 사전과 판정 임계값을 조정한다.</p>
   <ul class="crit">
     <li><i>01</i><span>개인정보 탐지 정밀도 · 재현율 · F1-score</span></li>
     <li><i>02</i><span>정상 정보 오탐률과 민감정보 미탐률</span></li>
