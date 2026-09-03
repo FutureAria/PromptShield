@@ -39,7 +39,8 @@ export {
   saveDictionary,
   send,
   setMockDelayRange,
-} from './mock'
+} from './client'
 
-// 실제 백엔드 연결 시 이 파일의 공개 API는 유지하고 위 mock export를
-// fetch 기반 구현 모듈(예: './client')의 동일한 함수 export로 교체한다.
+// 공개 API 는 그대로 두고 구현만 './mock' 에서 './client' 로 바꿨다.
+// client 는 기동할 때 /api/health 를 한 번 확인해, 백엔드가 있으면 실제 게이트웨이를
+// 쓰고 없으면 목으로 떨어진다. 백엔드 없이도 화면 시연이 끊기지 않는다.
